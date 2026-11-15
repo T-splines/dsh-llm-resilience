@@ -1,5 +1,7 @@
 # dsh-llm-resilience
 
+**English** | [简体中文](README.zh-CN.md)
+
 **Make a flaky LLM gateway behave like a reliable one — per-target retries, streaming-safe fallback chains and persistent circuit breaking for DeepSeek Harness.**
 
 This plugin was built from a concrete failure mode we hit in daily use. **OpenDesign Go**'s

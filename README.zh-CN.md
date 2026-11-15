@@ -1,5 +1,7 @@
 # dsh-llm-resilience
 
+[English](README.md) | **简体中文**
+
 **让不稳定的 LLM 网关表现得像可靠的一样——DeepSeek Harness 的按 target 重试、流式安全回退链与持久化熔断。**
 
 这个插件来自作者部署中实际遇到的失败场景：**OpenDesign Go** 的工具调用流与 API 连接会
