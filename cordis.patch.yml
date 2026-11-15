@@ -1,0 +1,46 @@
+# dsh-llm-resilience 的宿主平面挂载。
+#
+# 这个插件注册一个**合成的 provider route**（默认 `fallback`），对上层表现为普通
+# provider；内部按 `targets` 顺序调用真实 provider，处理每 target 的重试、链式
+# fallback、熔断锁和 half-open 探活。
+#
+# 设计见 DESIGN.md。Phase 1 已注册适配器，Phase 3 增加了设置页卡片，Phase 2 增加了全局
+# 预算、可观测性、多进程 stateFile 锁和后台探活；`targets: []` 或全部 target
+# `enabled: false` 时 route 存在但保持 dormant，不提供模型、不接收请求。
+# 设置页按这个 entry id（`llm-fallback`）索引；所有根字段都带 `.volatile()`，
+# 否则 dsh-settings 的 describe() 会跳过这个 entry。
+- insert:
+    - id: llm-fallback
+      name: 'dsh-llm-resilience'
+      config:
+        enabled: true
+        route: fallback
+        # 链上每个 target 的重试预算是独立的；fallback 到下一个 target 时退避重置，
+        # 不接着上一个 target 已经翻倍过的延迟继续。每个 target 的 `enabled: false`
+        # 保留配置但不参与链（设置页可切换）。
+        targets: []
+        # 每个 target 连败 failureThreshold 次后锁 lockMs；锁到期后先做一次最小
+        # chat 探活（maxTokens: 1），成功才恢复使用，失败再锁一轮。
+        breaker:
+          failureThreshold: 5
+          lockMs: 3600000
+          probe:
+            enabled: true
+            # true：锁到期的 target 本次请求直接跳过，后台探活，下次请求使用结果。
+            background: false
+            timeoutMs: 10000
+            maxTokens: 1
+            prompt: 'ping'
+          stateFile: '$DSH_HOME/storages/llm-resilience/state.json'
+        # 单次请求的全局预算；跨 target、跨重试累计，0 表示不限制。
+        limits:
+          maxTotalMs: 600000
+          maxAttempts: 50
+        # 只重试「模型输出坏了」的工具调用（MALFORMED_RESPONSE 等）。
+        # 工具**执行**失败的重试在插件层做不到：cordis 的 tools/execute waterfall
+        # 的 next() 是单次调用，再次调用会抛 next() called multiple times；
+        # 需要 dsh 核心提供 retry 钩子，见 DESIGN.md §8。
+        toolCalls:
+          retryMalformed: true
+        # 按稳定错误码覆盖分类：retry / fallback / fail。默认分类见 lib/policy.js。
+        codeActions: {}

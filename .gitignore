@@ -1,0 +1,26 @@
+# 目录形式的 node_modules（pnpm/npm 本地安装）
+node_modules/
+
+# ⚠ 符号链接形式的 node_modules（本仓库：指向 $DSH_HOME/profiles/node_modules 的 fallback 链接）
+# 带斜杠的 "node_modules/" 不匹配符号链接，必须单独写一条。
+node_modules
+
+# 本地临时文件
+*.bak-*
+*.before-*
+.DS_Store
+
+# ---- 本地密钥 / 凭据 ----
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+credentials*
+secrets*
+.npmrc
+*.log
