@@ -1,6 +1,6 @@
 {
   "name": "dsh-llm-resilience",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Provider-level retry, fallback chains and persistent circuit breaking for DeepSeek Harness LLM routes — built for gateways that intermittently break tool-call streams or connections.",
   "type": "module",
   "main": "lib/index.js",
