@@ -30,7 +30,7 @@ const helpers = loaded.exports.__test;
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 test('客户端注册在 llm-fallback 命名空间，并暴露 apply/inject', () => {
-	assert.equal(loaded.id, 'dsh-llm-resilience');
+	assert.equal(loaded.id, '@magic6/dsh-llm-resilience');
 	assert.equal(typeof loaded.exports.apply, 'function');
 	assert.ok(loaded.exports.inject.includes('locale'));
 	assert.ok(loaded.exports.inject.includes('configForms'));

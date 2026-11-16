@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.5.4] - 2026-11-16
+
+### Fixed
+
+- Bundle entry and client module identities now use the scoped npm package name,
+  so the installed package resolves at runtime and its settings page pairs with
+  the correct plugin row.
+- README: profile override examples use the scoped package name.
+
 ## [0.5.3] - 2026-11-16
 
 ### Changed

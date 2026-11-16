@@ -11,7 +11,7 @@
 # 否则 dsh-settings 的 describe() 会跳过这个 entry。
 - insert:
     - id: llm-fallback
-      name: 'dsh-llm-resilience'
+      name: '@magic6/dsh-llm-resilience'
       config:
         enabled: true
         route: fallback

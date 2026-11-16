@@ -93,7 +93,7 @@ target resets the backoff instead of inheriting the previous target's already-do
 | synthetic route | `fallback` (configurable) |
 | synthetic model | `auto` |
 | profile entry id | `llm-fallback` (kept stable for settings compatibility) |
-| package name | `dsh-llm-resilience` |
+| package name | `@magic6/dsh-llm-resilience` |
 | default state file | `$DSH_HOME/storages/llm-resilience/state.json` |
 
 `targets: []` (or every target `enabled: false`) leaves the route registered but dormant:
@@ -123,7 +123,7 @@ by the bundle. **Override that entry** — do not `insert` a second one. In
 
 ```yaml
 - id: llm-fallback
-  name: 'dsh-llm-resilience'
+  name: '@magic6/dsh-llm-resilience'
   config:
     enabled: true
     route: fallback
@@ -252,7 +252,7 @@ half-open --(probe fails)--> open for another lock window
 
 ## Settings page
 
-Plugins → Installed → `dsh-llm-resilience` → **Model fallback chain**:
+Plugins → Installed → `@magic6/dsh-llm-resilience` → **Model fallback chain**:
 
 - per-target rows: enabled, provider, model (read-only dropdowns from the session model
   catalog), label, retry parameters, move up/down, delete, add;
@@ -294,7 +294,7 @@ fake OpenAI-compatible server are described in [DESIGN.md](DESIGN.md).
 - DSH `0.2.2-rc.x` (`engines.dsh` is `>=0.2.2-0 <0.3.0-0`), Node.js 20+.
 - **Renamed from `dsh-llm-fallback` in 0.5.0.** The profile entry id remains `llm-fallback`,
   so settings and existing patches keep working; update the `name:` field to
-  `dsh-llm-resilience`.
+  `@magic6/dsh-llm-resilience`.
 - The default breaker state file moved to
   `$DSH_HOME/storages/llm-resilience/state.json`. Set `stateFile` explicitly if you want to
   keep using an older breaker file.

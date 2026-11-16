@@ -83,7 +83,7 @@ fallback/auto
 | 合成 route | `fallback`（可配置） |
 | 合成模型 | `auto` |
 | profile entry id | `llm-fallback`（为设置兼容保持不变） |
-| 包名 | `dsh-llm-resilience` |
+| 包名 | `@magic6/dsh-llm-resilience` |
 | 默认状态文件 | `$DSH_HOME/storages/llm-resilience/state.json` |
 
 `targets: []`（或所有 target `enabled: false`）时 route 仍然注册但保持 dormant：
@@ -113,7 +113,7 @@ entry**，不要再 `insert` 一份。在 `$DSH_HOME/profiles/<profile>/cordis.p
 
 ```yaml
 - id: llm-fallback
-  name: 'dsh-llm-resilience'
+  name: '@magic6/dsh-llm-resilience'
   config:
     enabled: true
     route: fallback
@@ -234,7 +234,7 @@ half-open --(探活失败)--> 再锁一轮
 
 ## 设置页
 
-Plugins → Installed → `dsh-llm-resilience` → **Model fallback chain**：
+Plugins → Installed → `@magic6/dsh-llm-resilience` → **Model fallback chain**：
 
 - 每个 target 一行：启用、provider、model（从会话模型目录读出的只读下拉）、显示名、
   重试参数、上下移动、删除、新增；
@@ -269,7 +269,7 @@ npm test
 
 - DSH `0.2.2-rc.x`（`engines.dsh` 为 `>=0.2.2-0 <0.3.0-0`）、Node.js 20+。
 - **0.5.0 从 `dsh-llm-fallback` 改名。** profile entry id 保持 `llm-fallback`，设置和已有
-  patch 继续可用；把 `name:` 字段改成 `dsh-llm-resilience` 即可。
+  patch 继续可用；把 `name:` 字段改成 `@magic6/dsh-llm-resilience` 即可。
 - 默认熔断状态文件移到 `$DSH_HOME/storages/llm-resilience/state.json`；想继续用旧文件就显式
   设置 `stateFile`。
 - 旧包名写下的 replay 信封仍然可读（`dsh-llm-fallback` 作为 legacy kind 接受）。
