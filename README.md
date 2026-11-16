@@ -1,115 +1,105 @@
 # dsh-llm-resilience
 
-**English** | [简体中文](https://github.com/T-splines/dsh-llm-resilience/blob/main/README.zh-CN.md)
+[English](https://github.com/T-splines/dsh-llm-resilience/blob/main/README.en.md) | **简体中文**
 
-**Make a flaky LLM gateway behave like a reliable one — per-target retries, streaming-safe fallback chains and persistent circuit breaking for DeepSeek Harness.**
+**让不稳定的 LLM 网关表现得像可靠的一样——DeepSeek Harness 的按 target 重试、流式安全回退链与持久化熔断。**
 
-This plugin was built from a concrete failure mode we hit in daily use. **OpenDesign Go**'s
-tool-call stream and API connections were intermittently unstable: a malformed tool-call
-stream, a transport drop, or a membership/quota error surfaced as a generic 500 could end
-an entire agent step. DSH's built-in `retryPolicy` is provider-level — it can back off on
-the same route, but it cannot switch provider/model, and it has no circuit breaker. In our
-deployment this plugin moved OpenDesign Go from **barely usable** to **reliably usable**:
-safe retries absorb transient faults, a second provider takes over when the gateway is out
-of quota or broken, and a persistent breaker stops hammering a dead upstream.
+这个插件来自作者部署中实际遇到的失败场景：**OpenDesign Go** 的工具调用流与 API 连接会
+间歇性不稳定。一条工具调用流损坏、一次传输中断，或者一次以普通 500 返回的会员/额度错误，
+就可能让整个 agent step 失败。DSH 内置的 `retryPolicy` 是 provider 级的：它能对同一条路由
+退避，但不能换 provider/model，也没有熔断。在日常使用中，这个插件把 OpenDesign Go 从
+**基本不可用**提升到了**基本可靠可用**：安全的重试吸收瞬时故障；网关额度耗尽或坏掉时由
+备用 provider 接手；持久化熔断器阻止继续打一个已经死掉的上游。
 
-> This is an independent plugin. It is not affiliated with or endorsed by OpenDesign or
-> DeepSeek; OpenDesign Go is mentioned only as the deployment that motivated the design.
-> The failure pattern is not unique to that service — any gateway that intermittently
-> breaks tool-call streams or returns quota errors as generic 500s benefits from the same
-> chain.
+> 本插件是独立项目，与 OpenDesign、DeepSeek 没有隶属或背书关系；
+> OpenDesign Go 只是促成这套设计的实际部署场景。该失败模式并非它独有：任何会间歇性
+> 损坏工具调用流、或把额度错误伪装成普通 500 的网关，都适用同一条链。
 
-- [Why this exists](#why-this-exists)
-- [What makes it different](#what-makes-it-different)
-- [What it registers](#what-it-registers)
-- [Install](#install)
-- [Configuration](#configuration)
-- [Error classification](#error-classification)
-- [Streaming, tool calls and step replay](#streaming-tool-calls-and-step-replay)
-- [Circuit breaker](#circuit-breaker)
-- [Settings page](#settings-page)
-- [Limits and honest non-goals](#limits-and-honest-non-goals)
-- [Tests](#tests)
-- [Compatibility and migration](#compatibility-and-migration)
+- [为什么需要它](#为什么需要它)
+- [差异点](#差异点)
+- [注册了什么](#注册了什么)
+- [安装](#安装)
+- [配置](#配置)
+- [错误分类](#错误分类)
+- [流式输出、工具调用与整步重放](#流式输出工具调用与整步重放)
+- [熔断](#熔断)
+- [设置页](#设置页)
+- [边界与不做的事](#边界与不做的事)
+- [测试](#测试)
+- [兼容与迁移](#兼容与迁移)
 
-## Why this exists
+## 为什么需要它
 
-DSH's `retryPolicy` already retries at the provider level, but:
+DSH 的 `retryPolicy` 已经在 provider 级重试，但：
 
-- the backoff multiplier is fixed at 2 — you cannot ask for 1.5;
-- `agent/request-error` can only retry the **same route**; it cannot switch provider/model;
-- there is no circuit breaker: when a provider is down, every step still hits it first;
-- `MALFORMED_RESPONSE` (a broken tool-call stream) and a failed tool **execution** need
-  different treatment.
+- 退避倍率固定为 2，不能配 1.5；
+- `agent/request-error` 只能重试**同一条路由**，不能换 provider/model；
+- 没有熔断：一个 provider 整体不可用时，每个 step 仍然先打它；
+- `MALFORMED_RESPONSE`（工具调用流损坏）与工具**执行**失败需要分开处理。
 
-This plugin registers a synthetic provider route (default `fallback`, model `auto`) that
-internally walks a chain of real provider/model targets:
+本插件注册一个合成 provider route（默认 `fallback`，模型 `auto`），内部按链调用真实
+provider/model：
 
 ```
 fallback/auto
-  ├─ target 0: primary-gateway/your-model       independent retry budget + breaker
-  ├─ target 1: backup-provider/your-model       independent retry budget + breaker
-  └─ target 2: local/your-model                 independent retry budget + breaker
+  ├─ target 0: primary-gateway/your-model       独立重试预算 + 独立熔断
+  ├─ target 1: backup-provider/your-model       独立重试预算 + 独立熔断
+  └─ target 2: local/your-model                 独立重试预算 + 独立熔断
 ```
 
-Every target has its own retry budget, backoff curve and breaker. Switching to the next
-target resets the backoff instead of inheriting the previous target's already-doubled delay.
+每个 target 有自己的重试预算、退避曲线和熔断；切到下一个 target 时退避从头开始，
+不继承上一条已经翻倍过的延迟。
 
-## What makes it different
+## 差异点
 
-- **Per-target retry budgets.** `maxRetries`, `initialDelayMs`, `multiplier` (including 1.5),
-  `maxDelayMs` and `jitterRatio` are independent for each target.
-- **Error-aware classification.** Membership/entitlement/quota errors surfaced as `SERVER`
-  500 fall back immediately; ordinary 500/timeout/transport errors retry; invalid requests
-  fail without trying another target. `codeActions` lets you override the defaults.
-- **Streaming-safe tool calls.** Text and reasoning deltas are forwarded immediately.
-  Tool-call block-start/delta chunks are buffered until `block-end`, so a malformed tool-call
-  stream (no `block-end`) can be retried without the host ever seeing duplicate output.
-- **Step-replay continuation.** After content has been delivered, a failure cannot switch
-  targets inside the same request. The plugin remembers `sessionId + request fingerprint`;
-  when the host replays the step it starts at the next target, and the plan **rotates** to
-  cover the whole chain instead of truncating it. If the failure was the chain tail, it is
-  retried in place — a retryable failure is never rewritten into a terminal
-  `FALLBACK_EXHAUSTED`.
-- **Persistent circuit breaker, per provider + model.** Consecutive failures lock a target
-  for a configurable window; the lock expires into a half-open probe (foreground or
-  background). State is written atomically to `stateFile` and merged across processes with
-  a lock + tombstones, so a restart does not forget a partially accumulated failure count.
-- **Global budget.** `limits.maxTotalMs` (default 10 minutes) and `limits.maxAttempts`
-  (default 50) are enforced across targets and retries; backoff waits count toward the
-  deadline. No combination of targets × retries can hang a step for an unbounded time.
-- **Request-level recovery codes pass through.** `IMAGE_OFFLOAD_REQUIRED` (with
-  `offloadImages`) and `CONTEXT_WINDOW_EXCEEDED` are re-thrown unchanged so the host's image
-  offload / compaction layers can recover first.
-- **Settings page.** Edit the chain, reorder targets, see each retry schedule, and watch live
-  breaker state (`closed / open / half-open / probing`) next to version and uninstall.
-- **Tested.** 90 `node --test` cases plus isolated DSH end-to-end smoke runs with a fake
-  OpenAI-compatible server (see [DESIGN.md](DESIGN.md)).
+- **每个 target 独立重试。** `maxRetries` / `initialDelayMs` / `multiplier`（支持 1.5）/
+  `maxDelayMs` / `jitterRatio` 都按 target 配置。
+- **按错误类型决策。** 以 `SERVER` 500 返回的会员/额度错误直接 fallback；普通
+  500/超时/传输错误重试；请求本身无效直接失败，不换 target。`codeActions` 可以覆盖默认表。
+- **流式安全的工具调用。** 文本/推理增量立即透传；tool-call 的 block-start/delta 缓冲到
+  `block-end` 才交付。因此工具参数非法（没有 block-end）时可以丢弃缓冲并重试，
+  宿主不会看到重复输出。
+- **整步重放续点。** 内容已经交付后再失败，不能在同一请求内换 target；插件记住
+  `sessionId + 请求指纹`，宿主重放同一步时从下一个 target 开始，并且计划是**轮转**而不是
+  截断，覆盖整条链。失败的是链尾时原地重试它——绝不把可重试失败改写成终态
+  `FALLBACK_EXHAUSTED`。
+- **持久化熔断，按 provider + model 记账。** 连败 N 次锁一个时间窗；到期进入 half-open
+  探活（前台或后台）。状态原子写进 `stateFile`，多进程用锁 + tombstone 合并，
+  重启不会忘掉尚未达到阈值的连败计数。
+- **全局预算。** `limits.maxTotalMs`（默认 10 分钟）与 `limits.maxAttempts`（默认 50）
+  跨 target、跨重试累计；退避等待也计入 deadline。任何 target × 重试的组合都不能把一步
+  拖到无上限。
+- **请求级恢复码原样透传。** `IMAGE_OFFLOAD_REQUIRED`（含 `offloadImages`）与
+  `CONTEXT_WINDOW_EXCEEDED` 原样抛出，让宿主的图片卸载 / 上下文压缩先恢复。
+- **设置页。** 编辑链、上下移动 target、查看每次重试计划、实时看熔断状态
+  （`closed / open / half-open / probing`）。
+- **有测试。** 90 个 `node --test` 用例，另有隔离 DSH + 本地假 OpenAI server 的端到端冒烟
+  （见 [DESIGN.md](DESIGN.md)）。
 
-## What it registers
+## 注册了什么
 
-| entry | value |
+| 项 | 值 |
 |:--|:--|
-| synthetic route | `fallback` (configurable) |
-| synthetic model | `auto` |
-| profile entry id | `llm-fallback` (kept stable for settings compatibility) |
-| package name | `@magic6/dsh-llm-resilience` |
-| default state file | `$DSH_HOME/storages/llm-resilience/state.json` |
+| 合成 route | `fallback`（可配置） |
+| 合成模型 | `auto` |
+| profile entry id | `llm-fallback`（为设置兼容保持不变） |
+| 包名 | `@magic6/dsh-llm-resilience` |
+| 默认状态文件 | `$DSH_HOME/storages/llm-resilience/state.json` |
 
-`targets: []` (or every target `enabled: false`) leaves the route registered but dormant:
-you can build the chain in the settings page first, then enable it.
+`targets: []`（或所有 target `enabled: false`）时 route 仍然注册但保持 dormant：
+可以先在设置页建链，再启用。
 
-## Install
+## 安装
 
-Requirements: DSH `0.2.2-rc.x`, Node.js 20+.
+要求：DSH `0.2.2-rc.x`、Node.js 20+。
 
-### From npm
+### 从 npm 安装
 
 ```bash
 dsh plugin --profile web add @magic6/dsh-llm-resilience
 ```
 
-### From source
+### 从源码安装
 
 ```bash
 git clone https://github.com/T-splines/dsh-llm-resilience.git
@@ -117,9 +107,9 @@ cd dsh-llm-resilience
 dsh plugin --profile web add "$PWD"
 ```
 
-The package is a bundle (`dsh.bundle.patch`), so the `llm-fallback` entry is already mounted
-by the bundle. **Override that entry** — do not `insert` a second one. In
-`$DSH_HOME/profiles/<profile>/cordis.patch.yml`, replacing the whole `config`:
+包本身是 bundle（`dsh.bundle.patch`），`llm-fallback` entry 已由 bundle 挂载。**覆盖这个
+entry**，不要再 `insert` 一份。在 `$DSH_HOME/profiles/<profile>/cordis.patch.yml` 里整体
+替换 `config`：
 
 ```yaml
 - id: llm-fallback
@@ -158,12 +148,11 @@ by the bundle. **Override that entry** — do not `insert` a second one. In
       retryMalformed: true
 ```
 
-Replace `primary-gateway` / `backup-provider` with real provider ids from your DSH model
-catalog (the settings page shows them as read-only dropdowns). A target whose provider does
-not exist fails with `NO_ADAPTER` and the chain moves on; it does not silently pretend the
-target served.
+把 `primary-gateway` / `backup-provider` 换成 DSH 模型目录里的真实 provider id（设置页的
+只读下拉框里能看到）。provider 不存在的 target 会报 `NO_ADAPTER`，链继续往后走，不会假装
+它服务成功。
 
-Then point the agent's default model at the synthetic route:
+然后把 agent 的默认模型指到合成 route：
 
 ```yaml
 - id: agent-default-model
@@ -172,135 +161,119 @@ Then point the agent's default model at the synthetic route:
     model: auto
 ```
 
-Verify composition without starting an agent (`web` is the common profile name; use yours):
+不启动 agent 验证组合树（`web` 是常见 profile 名，换成你自己的）：
 
 ```bash
 dsh --profile web --dump-config | grep -A8 'id: llm-fallback'
 ```
 
-> When overriding an existing `llm-fallback` entry with `--patch`, write the **whole**
-> `targets` array. DSH's config merge fills omitted array fields with an empty default, so
-> overriding only `breaker` would clear the chain.
+> 用 `--patch` 覆盖已有的 `llm-fallback` 条目时，要把 `targets` 数组写全：DSH 的配置合并
+> 会给省略的数组字段补空默认值，只写 `breaker` 会把链清空。
 
-**Do not give entitlement/quota errors 10 retries.** They are deterministic provider state;
-retrying the same target only wastes the budget. They should fall back on the first failure.
+**不要给会员/额度类错误配 10 次重试。** 它们是确定性的 provider 状态，重试同一个 target
+只会浪费预算，应该在第一次失败后直接 fallback。
 
-## Configuration
+## 配置
 
-| field | meaning |
+| 字段 | 含义 |
 |:--|:--|
-| `enabled` | master switch; the route still exists when disabled, but rejects requests |
-| `route` | synthetic provider name (default `fallback`); must not appear in `targets` |
-| `targets[]` | ordered `{ provider, model, enabled, label, maxRetries, initialDelayMs, multiplier, maxDelayMs, jitterRatio }` |
-| `breaker` | `failureThreshold`, `lockMs`, probe settings (`enabled`, `background`, `timeoutMs`, `maxTokens`, `prompt`), `stateFile` |
-| `limits` | `maxTotalMs`, `maxAttempts`; `0` disables that dimension |
-| `toolCalls.retryMalformed` | retry a broken model-generated tool call (default `true`); tool **execution** retries are not supported |
-| `codeActions` | override the default action per stable error code (`retry` / `fallback` / `fail`) |
+| `enabled` | 总开关；禁用时 route 仍存在但拒绝请求 |
+| `route` | 合成 provider 名（默认 `fallback`）；不能出现在 `targets` 里 |
+| `targets[]` | 有序的 `{ provider, model, enabled, label, maxRetries, initialDelayMs, multiplier, maxDelayMs, jitterRatio }` |
+| `breaker` | `failureThreshold`、`lockMs`、探活参数（`enabled` / `background` / `timeoutMs` / `maxTokens` / `prompt`）、`stateFile` |
+| `limits` | `maxTotalMs`、`maxAttempts`；`0` 表示不限制该维度 |
+| `toolCalls.retryMalformed` | 重试模型输出损坏的工具调用（默认 `true`）；工具**执行**失败不支持重试 |
+| `codeActions` | 按稳定错误码覆盖默认动作（`retry` / `fallback` / `fail`） |
 
-## Error classification
+## 错误分类
 
-| error | action | why |
+| 错误 | 动作 | 理由 |
 |:--|:--|:--|
-| `SERVER` + membership/entitlement/quota/billing/credit/plan | fallback | deterministic account state; retrying is useless |
-| `SERVER` / `TIMEOUT` / `TRANSPORT` / `RATE_LIMIT` / `EMPTY_RESPONSE` / `STREAM_CLOSED` | retry | transient |
-| `MALFORMED_RESPONSE` | retry | broken model output; safe to retry the whole LLM request |
-| `AUTH` / `INVALID_CREDENTIAL` / `MISSING_CREDENTIAL` | fallback | another provider may work |
-| `QUOTA` / `ACCOUNT_QUOTA` | fallback | switch provider/quota |
-| `NO_ADAPTER` / `UNKNOWN_MODEL` / `MODEL_NOT_FOUND` | fallback | target unavailable |
-| `ABORTED` / `CANCELLED` | fail | the caller cancelled |
-| `UNSUPPORTED_OPTION` / `INVALID_REQUEST` / `UNSUPPORTED_CONTENT` | fail | the request itself is wrong; another target will not fix it |
-| `IMAGE_OFFLOAD_REQUIRED` | fail (re-thrown) | host image-offload recovery must see it |
-| `CONTEXT_WINDOW_EXCEEDED` | fail (re-thrown) | host compaction recovery must see it |
-| unknown code | fallback | the last target still throws the original failure; nothing is swallowed |
+| `SERVER` + membership/entitlement/quota/billing/credit/plan | fallback | 确定性账号状态，重试无用 |
+| `SERVER` / `TIMEOUT` / `TRANSPORT` / `RATE_LIMIT` / `EMPTY_RESPONSE` / `STREAM_CLOSED` | retry | 瞬时故障 |
+| `MALFORMED_RESPONSE` | retry | 模型输出损坏；重试整个 LLM 请求是安全的 |
+| `AUTH` / `INVALID_CREDENTIAL` / `MISSING_CREDENTIAL` | fallback | 换一个 provider |
+| `QUOTA` / `ACCOUNT_QUOTA` | fallback | 换 provider / 额度 |
+| `NO_ADAPTER` / `UNKNOWN_MODEL` / `MODEL_NOT_FOUND` | fallback | 该 target 不可用 |
+| `ABORTED` / `CANCELLED` | fail | 调用方取消 |
+| `UNSUPPORTED_OPTION` / `INVALID_REQUEST` / `UNSUPPORTED_CONTENT` | fail | 请求本身的问题，换 target 也修不好 |
+| `IMAGE_OFFLOAD_REQUIRED` | fail（原样抛出） | 宿主的图片卸载恢复必须看到它 |
+| `CONTEXT_WINDOW_EXCEEDED` | fail（原样抛出） | 宿主的上下文压缩恢复必须看到它 |
+| 未知 code | fallback | 最后一个 target 仍会抛原始错误，不静默吞掉 |
 
-`IMAGE_OFFLOAD_REQUIRED` and `CONTEXT_WINDOW_EXCEEDED` cannot be overridden: they are part
-of DSH's request-level recovery protocol, and the host's listeners depend on the original
-code and metadata.
+`IMAGE_OFFLOAD_REQUIRED` 与 `CONTEXT_WINDOW_EXCEEDED` 不可覆盖：它们是 DSH 的请求级恢复协议，
+宿主的监听器依赖原始 code 与元数据。
 
-## Streaming, tool calls and step replay
+## 流式输出、工具调用与整步重放
 
-- Only switch targets **before** yielding anything visible to the caller.
-- Text/reasoning deltas are forwarded immediately.
-- Tool-call block-start/delta chunks are buffered until `block-end`; a malformed tool call
-  (no `block-end`) can be dropped and retried safely.
-- After visible content has been delivered, a failure is returned to the host so
-  `dsh-llm-retry` can replay the whole step. The plugin records a fingerprint and the
-  target it reached; on replay it starts at the next target. The plan **rotates** rather
-  than truncating, so a target before the failure point is not lost. If the failure was the
-  chain tail, it retries that target in place.
-- The replay envelope written by the synthetic route is unwrapped into the real target's
-  provider/model before the request reaches the upstream adapter, preserving signatures and
-  ids. Envelopes written by the pre-rename `dsh-llm-fallback` package are still accepted.
+- 只有在**还没有向调用方交付可见内容**时，才能在同一请求内换 target。
+- 文本/推理增量立即透传。
+- tool-call 的 block-start/delta 缓冲到 `block-end`；参数非法的工具调用（没有 `block-end`）
+  可以丢弃并安全重试。
+- 已经交付可见内容后再失败，交给宿主 `dsh-llm-retry` 整步重放。插件记录请求指纹与已试到的
+  target，重放时从下一个 target 开始；计划**轮转**而不是截断，失败点之前的 target 不会消失。
+  失败的是链尾时原地重试它。
+- 合成 route 写下的 replay 信封在请求到达上游前会还原成真实 target 的 provider/model，
+  保留签名与 id。旧包名 `dsh-llm-fallback` 写下的信封仍然可读。
 
-## Circuit breaker
+## 熔断
 
 ```
-closed --(failureThreshold consecutive failures)--> open
-open --(lock expires)--> half-open
-half-open --(probe succeeds)--> closed on the next real success
-half-open --(probe fails)--> open for another lock window
+closed --(连续 failureThreshold 次失败)--> open
+open --(lock 到期)--> half-open
+half-open --(探活成功)--> 下一次真实请求成功后 closed
+half-open --(探活失败)--> 再锁一轮
 ```
 
-- State is keyed by `provider + model`, not by provider alone.
-- `stateFile` is written atomically with a lock + read-merge-write. Concurrent processes
-  keep the later/more-failed entry; a successful clear writes a tombstone so an older lock
-  cannot be resurrected.
-- Unreached failure counts are persisted too (`updatedAt` is the merge timeline), so a
-  restart does not reset the count below the threshold.
-- When every target is open/probing, the plugin throws `ALL_TARGETS_LOCKED` with each
-  target's `lockedUntil` — it does not force one last request into a locked provider.
+- 状态按 `provider + model` 记账，不按 provider 整体记账。
+- `stateFile` 用锁 + 读-合并-写原子更新；并发进程取锁更晚/连败更多的条目；成功清除写
+  tombstone，旧锁不会被复活。
+- 未达阈值的连败也会落盘（`updatedAt` 是合并时间轴），重启不会把计数清零。
+- 全部 target 都 open/probing 时抛 `ALL_TARGETS_LOCKED`，附每个 target 的 `lockedUntil`，
+  不会硬打最后一个被锁的 provider。
 
-## Settings page
+## 设置页
 
-Plugins → Installed → `@magic6/dsh-llm-resilience` → **Model fallback chain**:
+Plugins → Installed → `@magic6/dsh-llm-resilience` → **Model fallback chain**：
 
-- per-target rows: enabled, provider, model (read-only dropdowns from the session model
-  catalog), label, retry parameters, move up/down, delete, add;
-- retry-plan tooltip: one line per retry, with the jitter range when `jitter > 0`;
-- breaker and budget fields;
-- live runtime state polled from the host (`closed / open / half-open / probing`, remaining
-  lock time, consecutive failures and lock count);
-- non-loopback browsers get the host's memory-state view and the card says so instead of
-  rendering plugin defaults as if they were the deployed policy.
+- 每个 target 一行：启用、provider、model（从会话模型目录读出的只读下拉）、显示名、
+  重试参数、上下移动、删除、新增；
+- 「重试计划」悬停：每次重试一行，`jitter > 0` 时显示区间；
+- 熔断与全局预算字段；
+- 「运行状态」每 4 秒从宿主读取：`closed / open / half-open / probing`、剩余锁定时间、
+  连败与累计锁次数；
+- 非环回浏览器拿到的是宿主内存态视图，卡片会明说，而不是把插件默认值当成部署策略。
 
-## Limits and honest non-goals
+## 边界与不做的事
 
-- **Tool execution is not retried.** Cordis 4.1's `tools/execute` waterfall calls `next()`
-  once; calling it again throws `next() called multiple times`. Automatically replaying a
-  tool body needs a retry hook in the DSH core/executor. The plugin does not ship a switch
-  that silently does nothing. Retrying a malformed **model-generated** tool call is safe and
-  supported.
-- **No infinite retries.** The global deadline and attempt cap are required; `0` disables a
-  dimension but is not recommended for production.
-- **Does not replace `@deepseek-ai/dsh-llm-retry`.** That package still owns step-level
-  retries; this plugin owns provider selection and request-level resilience.
-- **No streaming buffer for late fallback.** Once visible content is delivered, switching
-  targets would duplicate output; the plugin hands the step back to the host instead.
+- **工具执行失败不重试。** cordis 4.1 的 `tools/execute` waterfall 的 `next()` 是单次调用，
+  再次调用会抛 `next() called multiple times`；自动重放 tool body 需要 DSH 核心/executor
+  提供钩子。本插件不提供「配置了但静默无效」的开关。模型输出损坏的工具调用重试不受影响。
+- **不无限重试。** 全局 deadline 与尝试上限是必须的；`0` 只是关闭该维度，不建议生产使用。
+- **不替代 `@deepseek-ai/dsh-llm-retry`。** 后者仍负责 step 级重试；本插件负责 provider 选择
+  与请求级韧性。
+- **不会为了回退而缓冲整个流。** 已经交付可见内容后再换 target 会重复输出，所以交给宿主
+  整步重放。
 
-## Tests
+## 测试
 
 ```bash
 npm test
 ```
 
-90 cases cover backoff/jitter, error classification, chain validation, adapter execution,
-streaming safety, step-replay rotation, breaker persistence and multi-process merging,
-global budgets, background probing, settings-client pure functions and the replay envelope
-(including the legacy package name). End-to-end smoke runs on an isolated `DSH_HOME` with a
-fake OpenAI-compatible server are described in [DESIGN.md](DESIGN.md).
+90 个用例覆盖退避/抖动、错误分类、链校验、适配器执行、流式安全、整步重放轮转、熔断持久化
+与多进程合并、全局预算、后台探活、设置页纯函数，以及 replay 信封（含旧包名兼容）。
+隔离 `DSH_HOME` + 假 OpenAI-compatible server 的端到端冒烟见 [DESIGN.md](DESIGN.md)。
 
-## Compatibility and migration
+## 兼容与迁移
 
-- DSH `0.2.2-rc.x` (`engines.dsh` is `>=0.2.2-0 <0.3.0-0`), Node.js 20+.
-- **Renamed from `dsh-llm-fallback` in 0.5.0.** The profile entry id remains `llm-fallback`,
-  so settings and existing patches keep working; update the `name:` field to
-  `@magic6/dsh-llm-resilience`.
-- The default breaker state file moved to
-  `$DSH_HOME/storages/llm-resilience/state.json`. Set `stateFile` explicitly if you want to
-  keep using an older breaker file.
-- Replay envelopes from the old package name still unwrap (`dsh-llm-fallback` is accepted as
-  a legacy kind).
+- DSH `0.2.2-rc.x`（`engines.dsh` 为 `>=0.2.2-0 <0.3.0-0`）、Node.js 20+。
+- **0.5.0 从 `dsh-llm-fallback` 改名。** profile entry id 保持 `llm-fallback`，设置和已有
+  patch 继续可用；把 `name:` 字段改成 `@magic6/dsh-llm-resilience` 即可。
+- 默认熔断状态文件移到 `$DSH_HOME/storages/llm-resilience/state.json`；想继续用旧文件就显式
+  设置 `stateFile`。
+- 旧包名写下的 replay 信封仍然可读（`dsh-llm-fallback` 作为 legacy kind 接受）。
 
-## License
+## 许可
 
-MIT. See [LICENSE](LICENSE).
+MIT，见 [LICENSE](LICENSE)。
