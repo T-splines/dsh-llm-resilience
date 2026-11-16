@@ -96,7 +96,7 @@ fallback/auto
 ### 从 npm 安装
 
 ```bash
-dsh plugin --profile web add dsh-llm-resilience
+dsh plugin --profile web add @magic6/dsh-llm-resilience
 ```
 
 ### 从源码安装
