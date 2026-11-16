@@ -1,6 +1,6 @@
 # dsh-llm-resilience
 
-**English** | [简体中文](README.zh-CN.md)
+**English** | [简体中文](https://github.com/T-splines/dsh-llm-resilience/blob/main/README.zh-CN.md)
 
 **Make a flaky LLM gateway behave like a reliable one — per-target retries, streaming-safe fallback chains and persistent circuit breaking for DeepSeek Harness.**
 
@@ -102,6 +102,14 @@ you can build the chain in the settings page first, then enable it.
 ## Install
 
 Requirements: DSH `0.2.2-rc.x`, Node.js 20+.
+
+### From npm
+
+```bash
+dsh plugin --profile web add dsh-llm-resilience
+```
+
+### From source
 
 ```bash
 git clone https://github.com/T-splines/dsh-llm-resilience.git

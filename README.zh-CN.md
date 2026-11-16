@@ -1,6 +1,6 @@
 # dsh-llm-resilience
 
-[English](README.md) | **简体中文**
+[English](https://github.com/T-splines/dsh-llm-resilience/blob/main/README.md) | **简体中文**
 
 **让不稳定的 LLM 网关表现得像可靠的一样——DeepSeek Harness 的按 target 重试、流式安全回退链与持久化熔断。**
 
@@ -92,6 +92,14 @@ fallback/auto
 ## 安装
 
 要求：DSH `0.2.2-rc.x`、Node.js 20+。
+
+### 从 npm 安装
+
+```bash
+dsh plugin --profile web add dsh-llm-resilience
+```
+
+### 从源码安装
 
 ```bash
 git clone https://github.com/T-splines/dsh-llm-resilience.git
