@@ -101,7 +101,7 @@ you can build the chain in the settings page first, then enable it.
 
 ## Install
 
-Requirements: DSH `0.2.2-rc.x`, Node.js 20+.
+Requirements: DSH `0.2.1-rc.x` / `0.2.2-rc.x`, Node.js 20+.
 
 ### From npm
 
@@ -291,7 +291,7 @@ fake OpenAI-compatible server are described in [DESIGN.md](DESIGN.md).
 
 ## Compatibility and migration
 
-- DSH `0.2.2-rc.x` (`engines.dsh` is `>=0.2.2-0 <0.3.0-0`), Node.js 20+.
+- DSH `0.2.1-rc.x` / `0.2.2-rc.x` (`engines.dsh` is `>=0.2.1-0 <0.3.0-0`), Node.js 20+.
 - **Renamed from `dsh-llm-fallback` in 0.5.0.** The profile entry id remains `llm-fallback`,
   so settings and existing patches keep working; update the `name:` field to
   `@magic6/dsh-llm-resilience`.

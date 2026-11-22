@@ -91,7 +91,7 @@ fallback/auto
 
 ## 安装
 
-要求：DSH `0.2.2-rc.x`、Node.js 20+。
+要求：DSH `0.2.1-rc.x` / `0.2.2-rc.x`、Node.js 20+。
 
 ### 从 npm 安装
 
@@ -267,7 +267,7 @@ npm test
 
 ## 兼容与迁移
 
-- DSH `0.2.2-rc.x`（`engines.dsh` 为 `>=0.2.2-0 <0.3.0-0`）、Node.js 20+。
+- DSH `0.2.1-rc.x` / `0.2.2-rc.x`（`engines.dsh` 为 `>=0.2.1-0 <0.3.0-0`）、Node.js 20+。
 - **0.5.0 从 `dsh-llm-fallback` 改名。** profile entry id 保持 `llm-fallback`，设置和已有
   patch 继续可用；把 `name:` 字段改成 `@magic6/dsh-llm-resilience` 即可。
 - 默认熔断状态文件移到 `$DSH_HOME/storages/llm-resilience/state.json`；想继续用旧文件就显式
