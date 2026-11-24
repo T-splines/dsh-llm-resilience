@@ -121,8 +121,12 @@ jobs:
             echo "::error::GitHub returned no OIDC id_token; check the 'id-token: write' permission."
             exit 1
           fi
-          # 只打 header 里的签发信息，不打 token 本身。
-          node -e 'const p=JSON.parse(Buffer.from(process.argv[1].split(".")[1],"base64url").toString());console.log("oidc claims:", JSON.stringify({aud:p.aud,iss:p.iss,repository:p.repository,ref:p.ref,event_name:p.event_name,job_workflow_ref:p.job_workflow_ref}))' "${ID_TOKEN}"
+          # 只打 claims，不打 token 本身。同时抛成 annotation：
+          # GitHub 的 job log 要 admin 权限才能下载，annotation 才是外部可读的通道。
+          CLAIMS="$(node -e 'const p=JSON.parse(Buffer.from(process.argv[1].split(".")[1],"base64url").toString());console.log(JSON.stringify({aud:p.aud,repository:p.repository,ref:p.ref,job_workflow_ref:p.job_workflow_ref}))' "${ID_TOKEN}")"
+          echo "oidc claims: ${CLAIMS}"
+          echo "::warning::OIDC claims => ${CLAIMS}"
+          echo "::warning::npm 侧必须与此一致：Organization or user=T-splines, Repository=dsh-llm-resilience, Workflow filename=publish.yml, Environment=（留空）"
 
           BODY_FILE="$(mktemp)"
           STATUS="$(curl -sS -o "${BODY_FILE}" -w '%{http_code}' -X POST \
