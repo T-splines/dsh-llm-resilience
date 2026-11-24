@@ -25,6 +25,13 @@ All notable changes to this project are documented here. The format follows
   `ctx.logger`, so without this record "why did it not fail over" was
   unanswerable from logs.
 
+### Changed
+
+- **Releases now go through npm OIDC trusted publishing**, not a local token.
+  `.github/workflows/publish.yml` publishes on a `vX.Y.Z` tag and refuses to run
+  when the tag, `package.json` and the CHANGELOG top section disagree.
+  CONTRIBUTING documents the one-time trusted-publisher setup.
+
 ## [0.5.5] - 2026-11-22
 
 ### Fixed
