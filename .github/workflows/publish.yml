@@ -10,7 +10,22 @@
 # OIDC 用工作流自己的短时身份换发布凭据：没有 token 可泄露、没有 90 天轮换、
 #   也不会再出现「发版前才发现 token 过期」。
 #
-# 一次性人工前置（只有这一步需要人）：
+# ⚠ 2026-11-25 结论：这条路目前走不通，不是配置问题。
+#   GitHub 自 2026-07-15 起对新仓库强制 immutable subject claim：
+#     sub = repo:T-splines@95456842/dsh-llm-resilience@1459101202:ref:refs/tags/v0.5.6
+#   npm registry 拿这个 sub 去匹配 trusted publisher 记录时匹配不上，一律回
+#   {"message":"OIDC token exchange error - package not found"}（npm/cli#9969，
+#   仍 open，Priority 1）。本仓库建于 2026-11-15，必然是这个格式；
+#   实测 PUT /repos/.../actions/oidc/customization/sub {use_default:false,
+#   use_immutable_subject:false} 返回 201 但 GET 仍是 true —— GitHub 不让关。
+#   对照：2026-07-15 之前建的仓库（如 T-splines/AI_Reader）immutable=False，
+#   走旧格式，OIDC 可用。
+#
+#   所以 trusted publisher 配得再对也没用。当前发版走本机 token
+#   （Keychain npm-token-oss + scripts/npm-publish-keychain.sh）。
+#   npm 修好 #9969 之后，这个 workflow 不用改就能自动接管。
+#
+# 一次性人工前置（等 npm 修复后才需要）：
 #   npmjs.com → Packages → @magic6/dsh-llm-resilience → Settings → Trusted publishing
 #   Provider: GitHub Actions
 #   Organization or user: T-splines
@@ -167,7 +182,11 @@ jobs:
           echo "exchange HTTP ${STATUS}"
           echo "exchange body: $(head -c 400 "${BODY_FILE}")"
           if [ "${STATUS}" != "200" ]; then
-            echo "::error::OIDC token exchange failed (HTTP ${STATUS}). npm says: $(head -c 300 "${BODY_FILE}") — a 404/401 here means no trusted publisher on this package matches T-splines/dsh-llm-resilience + publish.yml."
+            # 说清 404 的两种可能，别让人去重配一个本来就对的设置：
+            # 本仓库建于 2026-11-15，GitHub 对新仓库强制 immutable subject claim，
+            # sub = repo:T-splines@95456842/dsh-llm-resilience@1459101202:ref:...
+            # registry 侧匹配不上就统一回 "package not found"（npm/cli#9969，open，P1）。
+            echo "::error::OIDC token exchange failed (HTTP ${STATUS}). npm says: $(head -c 300 "${BODY_FILE}") — 两种可能：① npm 侧没有 trusted publisher 记录；② 有记录但 sub claim 是 immutable 格式（本仓库建于 2026-07-15 之后，必然是这种），npm registry 匹配不上，见 npm/cli#9969。看上面 "sub claim => " 那行的 immutable_subject 字段即可区分。"
             exit 1
           fi
           node -e 'const b=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));console.log("exchange ok, token fields:", Object.keys(b).join(","))' "${BODY_FILE}"
