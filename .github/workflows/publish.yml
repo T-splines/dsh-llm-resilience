@@ -128,6 +128,17 @@ jobs:
           echo "::warning::OIDC claims => ${CLAIMS}"
           echo "::warning::npm 侧必须与此一致：Organization or user=T-splines, Repository=dsh-llm-resilience, Workflow filename=publish.yml, Environment=（留空）"
 
+          # 同时探另外两个包：如果它们 200 而本包 404，说明 trusted publisher 配到了
+          # 别的包上（或本包的 workflow 文件名/环境对不上），一眼就能区分。
+          for OTHER in "@magic6/dsh-web-fallback-chain" "@magic6/dsh-compaction-policy-engine" "@magic6/dsh-llm-resilience"; do
+            ESC="$(node -e 'console.log(encodeURIComponent(process.argv[1]).replace("%40","@"))' "${OTHER}")"
+            CODE="$(curl -sS -o /tmp/x.json -w '%{http_code}' -X POST \
+              "https://registry.npmjs.org/-/npm/v1/oidc/token/exchange/package/${ESC}" \
+              -H "Authorization: Bearer ${ID_TOKEN}" || true)"
+            echo "exchange probe ${OTHER} -> HTTP ${CODE} $(head -c 160 /tmp/x.json 2>/dev/null)"
+            echo "::warning::OIDC exchange ${OTHER} -> HTTP ${CODE} $(head -c 160 /tmp/x.json 2>/dev/null)"
+          done
+
           BODY_FILE="$(mktemp)"
           STATUS="$(curl -sS -o "${BODY_FILE}" -w '%{http_code}' -X POST \
             "https://registry.npmjs.org/-/npm/v1/oidc/token/exchange/package/${ESCAPED}" \
