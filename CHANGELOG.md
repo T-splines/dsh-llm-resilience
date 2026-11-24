@@ -4,6 +4,27 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.5.6] - 2026-11-24
+
+### Fixed
+
+- **Gateway-wrapped upstream 4xx is now a target-level fault, not a request
+  error.** A gateway can return `400 {"code":"upstream_error"}` for a request
+  whose body is fine; pi-ai sees the literal `400` and classifies it as
+  `INVALID_REQUEST`, which the chain treated as `fail` — so the whole fallback
+  chain became a no-op at the first target. Such failures now fall back to the
+  next target. Genuine request errors (invalid tool schema, oversized payload,
+  missing field) carry none of those markers and still fail fast. Explicit
+  `codeActions.INVALID_REQUEST` overrides still win.
+
+### Added
+
+- A `plugin:llm-fallback` session record (`kind: "stop"`) whenever the chain
+  deliberately stops instead of switching targets, carrying the failure code
+  and the classification reason. The host mounts no console exporter for
+  `ctx.logger`, so without this record "why did it not fail over" was
+  unanswerable from logs.
+
 ## [0.5.5] - 2026-11-22
 
 ### Fixed

@@ -1062,3 +1062,68 @@ test('运行状态与 session 事件：retry / fallback / lock 都可见', async
 	assert.equal(latest.targets[0].failures, 2);
 	assert.equal(latest.targets[0].locks, 1);
 });
+
+test('网关包装的上游 400 在链上第二个 target 成功（线上 2026-11-24 复现）', async () => {
+	// target 1 返回网关的包装 400（pi-ai 判 INVALID_REQUEST），同一 payload 在
+	// target 2 上 200。以前的分类把它当 stop，直接抛原始错误、链等于不存在。
+	const llm = createLlm({
+		'p1/m1': [
+			[
+				errorChunk(
+					'INVALID_REQUEST',
+					'400: {"message":"[code=upstream_error] The request could not be completed.","type":"upstream_error","code":"upstream_error"}',
+				),
+			],
+		],
+		'p2/m2': [okAttempt('recovered')],
+	});
+	const { adapter, warnings } = makeAdapter(
+		makeConfig([target('p1', 'm1', { maxRetries: 0 }), target('p2', 'm2')]),
+		llm,
+	);
+
+	const chunks = await collect(adapter.stream(streamOptions));
+
+	assert.equal(chunks.at(-1).reason.kind, 'stop');
+	assert.equal(llm.calls.length, 2);
+	assert.equal(llm.calls[1].provider, 'p2');
+	assert.ok(warnings.some((line) => line.includes('target p1/m1 exhausted (INVALID_REQUEST)')));
+	// target 1 的失败要记进熔断（它确实是 target 级故障）；target 2 成功后自己的 entry 归零。
+	assert.equal(adapter.breaker.state('p1\u0000m1'), 'closed');
+	assert.equal(adapter.breaker.snapshot().entries['p1\u0000m1'].failures, 1);
+});
+
+test('真正的请求错误仍然直通：包装识别不会把非法 payload 变成重试', async () => {
+	const llm = createLlm({
+		'p1/m1': [[errorChunk('INVALID_REQUEST', '400: {"error":{"message":"tools[0]: missing field `type`"}}')]],
+		'p2/m2': [okAttempt('should not be used')],
+	});
+	const { adapter } = makeAdapter(
+		makeConfig([target('p1', 'm1', { maxRetries: 3 }), target('p2', 'm2')]),
+		llm,
+	);
+
+	const { error } = await collectSettled(adapter.stream(streamOptions));
+
+	assert.equal(error.code, 'INVALID_REQUEST');
+	assert.equal(llm.calls.length, 1);
+});
+
+test('链路主动停下（请求真坏）时写一条可追的会话记录', async () => {
+	const records = [];
+	const llm = createLlm({
+		'p1/m1': [[errorChunk('INVALID_REQUEST', 'tools[0]: missing field `type`')]],
+		'p2/m2': [okAttempt('should not be used')],
+	});
+	const { adapter } = makeAdapter(
+		makeConfig([target('p1', 'm1', { maxRetries: 3 }), target('p2', 'm2')]),
+		llm,
+		{ recordSession: (sessionId, event) => records.push(event) },
+	);
+
+	await collectSettled(adapter.stream({ ...streamOptions, sessionId: 's1' }));
+
+	assert.deepEqual(records, [
+		{ kind: 'stop', target: 'p1/m1', code: 'INVALID_REQUEST', reason: 'request-invalid' },
+	]);
+});

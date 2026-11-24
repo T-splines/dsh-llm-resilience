@@ -196,6 +196,7 @@ dsh --profile web --dump-config | grep -A8 'id: llm-fallback'
 | `QUOTA` / `ACCOUNT_QUOTA` | fallback | 换 provider / 额度 |
 | `NO_ADAPTER` / `UNKNOWN_MODEL` / `MODEL_NOT_FOUND` | fallback | 该 target 不可用 |
 | `ABORTED` / `CANCELLED` | fail | 调用方取消 |
+| `INVALID_REQUEST` + `upstream_error` 等网关包装标记 | fallback | 网关把自己上游的故障包成 400；请求体本身没问题，链上别的 target 能成功 |
 | `UNSUPPORTED_OPTION` / `INVALID_REQUEST` / `UNSUPPORTED_CONTENT` | fail | 请求本身的问题，换 target 也修不好 |
 | `IMAGE_OFFLOAD_REQUIRED` | fail（原样抛出） | 宿主的图片卸载恢复必须看到它 |
 | `CONTEXT_WINDOW_EXCEEDED` | fail（原样抛出） | 宿主的上下文压缩恢复必须看到它 |
@@ -203,6 +204,13 @@ dsh --profile web --dump-config | grep -A8 'id: llm-fallback'
 
 `IMAGE_OFFLOAD_REQUIRED` 与 `CONTEXT_WINDOW_EXCEEDED` 不可覆盖：它们是 DSH 的请求级恢复协议，
 宿主的监听器依赖原始 code 与元数据。
+
+网关包装识别只在 `INVALID_REQUEST` / `PI_AI_ERROR` / `UNKNOWN` 这三个「状态码文本猜出来的」
+分类上生效，且要求报文里出现 `upstream_error` / `upstream_timeout` / `bad_gateway` /
+`gateway_error` 之一。理由：pi-ai 见到报文里的 `400` 就判 `INVALID_REQUEST`，但同一份
+payload 换下一个 target 常常 200（OpenDesign Go 实测：eco 400 / flash 200 / dsc 200）。
+真正的请求错误（工具定义缺字段、载荷超限、参数非法）没有这些标记，仍然 fail。
+`codeActions` 里的显式覆盖依然优先。
 
 ## 流式输出、工具调用与整步重放
 

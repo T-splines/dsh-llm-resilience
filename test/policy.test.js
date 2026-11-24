@@ -447,3 +447,45 @@ test('链执行计划：被锁的 target 被跳过，half-open 保留给探活',
 	assert.deepEqual(attempts.map(({ state }) => state), [BREAKER_STATES.HALF_OPEN, BREAKER_STATES.CLOSED]);
 	assert.equal(usableAttempts(attempts).length, 2, 'half-open 仍应出现在计划里，交给适配器先探活');
 });
+
+test('错误分类：网关包装的上游 400（upstream_error）是 target 级故障，必须 fallback 到下一个 target', () => {
+	// 线上原文（2026-11-24 会话 7fb5e567 turn 12）：pi-ai 见到 "400" 就判 INVALID_REQUEST，
+	// 但请求体本身没问题 —— 同一个 payload 发给链上第二个 target 返回 200。
+	const failure = {
+		code: 'INVALID_REQUEST',
+		message:
+			'400: {"message":"[code=upstream_error] The request could not be completed.","type":"upstream_error","code":"upstream_error"}',
+	};
+	assert.deepEqual(classifyFailure(failure), {
+		action: ACTIONS.FALLBACK,
+		code: 'INVALID_REQUEST',
+		reason: 'upstream-wrapper',
+	});
+
+	// 真正的请求错误（本地校验/参数缺失/载荷过大）仍然 fail，不能换 target。
+	const genuine = {
+		code: 'INVALID_REQUEST',
+		message: '400: {"error":{"message":"tools[0]: missing field `type`"}}',
+	};
+	assert.equal(classifyFailure(genuine).action, ACTIONS.FAIL);
+
+	// 显式覆盖优先于包装识别。
+	assert.deepEqual(classifyFailure(failure, { INVALID_REQUEST: 'fail' }), {
+		action: ACTIONS.FAIL,
+		code: 'INVALID_REQUEST',
+		reason: 'override',
+	});
+	assert.deepEqual(classifyFailure(failure, { INVALID_REQUEST: 'retry' }), {
+		action: ACTIONS.RETRY,
+		code: 'INVALID_REQUEST',
+		reason: 'override',
+	});
+});
+
+test('包装识别只作用于 4xx 派生的 INVALID_REQUEST，不改变 500 的重试语义', () => {
+	const wrapped = { message: '[code=internal_error] failed to evaluate membership entitlement' };
+	assert.equal(classifyFailure({ ...wrapped, code: 'SERVER' }).action, ACTIONS.FALLBACK);
+	assert.equal(classifyFailure({ ...wrapped, code: 'SERVER' }).reason, 'entitlement');
+	const plainServer = { code: 'SERVER', message: '500: {"code":"internal_error","message":"boom"}' };
+	assert.equal(classifyFailure(plainServer).action, ACTIONS.RETRY);
+});

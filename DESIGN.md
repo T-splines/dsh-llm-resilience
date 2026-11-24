@@ -124,6 +124,7 @@ Default table (see `lib/policy.js`; override with `codeActions`):
 | `QUOTA` / `ACCOUNT_QUOTA` | fallback | switch provider/quota |
 | `NO_ADAPTER` / `UNKNOWN_MODEL` / `MODEL_NOT_FOUND` | fallback | target unavailable |
 | `ABORTED` / `CANCELLED` | fail | caller cancelled |
+| `INVALID_REQUEST`/`PI_AI_ERROR`/`UNKNOWN` + an upstream-wrapper marker (`upstream_error`, `upstream_timeout`, `bad_gateway`, `gateway_error`) | fallback | the gateway wrapped its own upstream failure in a 400; the request body is fine and another target succeeds |
 | `UNSUPPORTED_OPTION` / `INVALID_REQUEST` / `UNSUPPORTED_CONTENT` | fail | request itself is invalid |
 | `IMAGE_OFFLOAD_REQUIRED` | fail (rethrow) | host image-offload recovery |
 | `CONTEXT_WINDOW_EXCEEDED` | fail (rethrow) | host compaction recovery |
@@ -131,6 +132,14 @@ Default table (see `lib/policy.js`; override with `codeActions`):
 
 `IMAGE_OFFLOAD_REQUIRED` and `CONTEXT_WINDOW_EXCEEDED` cannot be overridden: they are part
 of DSH's request-level recovery protocol and carry metadata the host needs.
+
+Wrapper detection is deliberately narrowed to the codes pi-ai derives from the status-code
+text (`INVALID_REQUEST`, `PI_AI_ERROR`, `UNKNOWN`) and requires one of the wrapper markers
+in the message. Rationale: pi-ai maps any message containing `400` to `INVALID_REQUEST`;
+gateways routinely use 400 for their own upstream failure (OpenDesign Go: `400
+{"code":"upstream_error"}`), and the identical payload succeeds on the next target. Genuine
+request errors (invalid tool schema, oversized payload) carry no such marker and still
+`fail`. Explicit `codeActions` overrides are applied before this rule and still win.
 
 ## 7. Backoff and global budget
 
