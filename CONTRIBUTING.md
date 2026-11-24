@@ -105,12 +105,37 @@ failures apart:
 | Exchange result | Meaning |
 |:--|:--|
 | `200` + token | the OIDC chain and the trusted publisher both match |
-| `404 {"message":"OIDC token exchange error - package not found"}` | npm has **no trusted publisher record** for that package — it is not about tokens, npm version, or `id-token: write` |
+| `404 {"message":"OIDC token exchange error - package not found"}` | npm could not match this package to the token — **either** no trusted publisher record **or** a `sub` claim the registry cannot match. Use `immutable_subject` to tell them apart (below) |
 | `401 unauthorized` | the OIDC token itself was rejected (audience, permissions, self-hosted runner) |
 
 `404 ... package not found` is the one that wasted an hour here: the message says
-"package not found" but the package is on the registry and public. It means the *trusted
-publisher* was not found. Confirm from an authenticated shell with
+"package not found" but the package is on the registry and public. `left-pad` — a package
+that certainly has no trusted publisher — returns the identical 404, which confirms the
+string means "no match", not "no such package", but it does **not** distinguish the two
+causes. The `sub claim =>` annotation does:
+
+```json
+{"sub":"repo:T-splines@95456842/dsh-llm-resilience@1459101202:ref:refs/tags/v0.5.6","immutable_subject":true}
+```
+
+Since 15 July 2026 GitHub issues *immutable subject claims* for new repositories:
+`repo:OWNER@<id>/REPO@<id>:ref:...` instead of `repo:OWNER/REPO:ref:...`. npm's registry
+does not match the immutable form and answers with the same "package not found" body
+([npm/cli#9969](https://github.com/npm/cli/issues/9969), open, Priority 1). Every
+`T-splines/*` repo created on or after that date is affected; older ones (for example
+`T-splines/AI_Reader`) still carry `immutable=False` and publish through OIDC fine.
+
+It cannot be switched off from the repository: `PUT
+/repos/{owner}/{repo}/actions/oidc/customization/sub` with
+`{"use_default":false,"use_immutable_subject":false}` answers `201` with an empty body and
+a follow-up `GET` still reports `true`.
+
+So when `immutable_subject` is `true`, re-checking the npm form is wasted effort — the
+configuration can be perfect and the exchange still 404s. Publish with the token in
+macOS Keychain (`scripts/npm-publish-keychain.sh`) until npm fixes #9969; this workflow
+needs no change to take over again afterwards.
+
+When `immutable_subject` is `false`, confirm the settings with
 `npm trust list @magic6/<name>` (npm ≥ 11.15, needs an interactive `npm login`), which
 prints the exact repository, workflow filename and environment npm has on file —
 compare those three strings with what the workflow's OIDC claims say.
