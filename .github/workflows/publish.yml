@@ -134,7 +134,10 @@ jobs:
 
           # 同时探另外两个包：如果它们 200 而本包 404，说明 trusted publisher 配到了
           # 别的包上（或本包的 workflow 文件名/环境对不上），一眼就能区分。
-          for OTHER in "@magic6/dsh-web-fallback-chain" "@magic6/dsh-compaction-policy-engine" "@magic6/dsh-llm-resilience"; do
+          # 含一个**确定没配** trusted publisher 的基线包（left-pad）：
+          #   基线也是 404 => 「package not found」就是「没配置」的标准文案，本包确实没配上
+          #   基线不是 404 => 我们的 404 另有含义，别急着让人重配
+          for OTHER in "@magic6/dsh-web-fallback-chain" "@magic6/dsh-compaction-policy-engine" "@magic6/dsh-llm-resilience" "left-pad"; do
             ESC="${OTHER/@/%40}"
             ESC="${ESC/\//%2f}"
             CODE="$(curl -sS -o /tmp/x.json -w '%{http_code}' -X POST \
