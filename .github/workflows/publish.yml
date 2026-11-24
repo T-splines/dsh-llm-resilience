@@ -53,7 +53,7 @@ jobs:
           node-version: '24'
           # 让 npm 知道 registry；不要设置 token —— OIDC 路径要求完全无凭据。
           registry-url: 'https://registry.npmjs.org'
-          package-manager-cache: false
+          cache: ''
 
       - name: Verify npm CLI supports trusted publishing (>= 11.5.1)
         shell: bash
@@ -123,5 +123,35 @@ jobs:
             exit 0
           fi
 
-          npm publish --access public --registry=https://registry.npmjs.org/
+          # 失败时必须看得到 npm 的原话：403/404/ENEEDAUTH 对应完全不同的修法。
+          set +e
+          npm publish --access public --registry=https://registry.npmjs.org/ --loglevel verbose 2>&1 | tee /tmp/publish.log
+          STATUS=${PIPESTATUS[0]}
+          set -e
+
+          if [ "${STATUS}" -ne 0 ]; then
+            echo "::group::npm publish diagnostics"
+            echo "--- npm / node ---"
+            npm --version; node --version
+            echo "--- offline OIDC env present? ---"
+            for v in ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN NODE_AUTH_TOKEN NPM_TOKEN; do
+              val="${!v:-}"
+              if [ -n "${val}" ]; then echo "${v}: set (length ${#val})"; else echo "${v}: empty"; fi
+            done
+            echo "--- effective npm config (auth fields only) ---"
+            npm config list 2>&1 | grep -iE 'registry|auth|token|userconfig' || true
+            echo "--- registry view of the package ---"
+            npm view "${PKG}" version --registry=https://registry.npmjs.org/ 2>&1 | tail -3
+            echo "--- auth-ish lines from the publish log ---"
+            grep -iE 'e40[0-9]|e403|eneedauth|otp|oidc|trusted|publish|not permitted|forbidden' /tmp/publish.log | tail -25 || true
+            echo "::endgroup::"
+            # 关键一行抛成 annotation：GitHub 的 log 下载要 admin 权限，但
+            # check-run 的 annotation 是公开可读的 —— 这是唯一能从外部看到
+            # 「npm 到底说了什么」的通道（2026-11-24 排障时踩到过）。
+            KEY="$(grep -iE 'npm error|e40[0-9]|eneedauth|forbidden|not permitted' /tmp/publish.log | head -3 | tr '\n' ' ' | cut -c1-350)"
+            echo "::error::npm publish failed (exit ${STATUS}): ${KEY:-no diagnostic line matched}"
+            echo "### ❌ Publish failed with exit ${STATUS}" >> "${GITHUB_STEP_SUMMARY}"
+            exit "${STATUS}"
+          fi
+
           echo "### ✅ Published ${PKG}@${VERSION} to npmjs (OIDC, no token)" >> "${GITHUB_STEP_SUMMARY}"

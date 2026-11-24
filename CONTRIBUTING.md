@@ -76,3 +76,23 @@ curl -s https://registry.npmjs.org/@magic6%2Fdsh-llm-resilience | \
 `npm whoami` is **not** a health check for this setup: trusted publishing never
 issues a user-scoped token, and npm's own docs say to verify permissions with the
 operation you actually intend to perform.
+
+### Debugging a failed publish
+
+GitHub does not let a non-admin download Actions logs over the API (`403 Must have
+admin rights`), and this machine has no `gh` CLI. The workflow therefore echoes the
+decisive npm line as a check-run annotation, which *is* publicly readable:
+
+```bash
+SHA=$(git rev-parse HEAD)
+curl -s "https://api.github.com/repos/T-splines/dsh-llm-resilience/commits/$SHA/check-runs" \
+  | jq -r '.check_runs[] | "\(.name): \(.conclusion)"'
+RUN=$(curl -s "https://api.github.com/repos/T-splines/dsh-llm-resilience/actions/runs?per_page=1" | jq -r '.workflow_runs[0].id')
+JOB=$(curl -s "https://api.github.com/repos/T-splines/dsh-llm-resilience/actions/runs/$RUN/jobs" | jq -r '.jobs[0].id')
+curl -s "https://api.github.com/repos/T-splines/dsh-llm-resilience/check-runs/$JOB/annotations" \
+  | jq -r '.[] | select(.annotation_level=="failure") | .message'
+```
+
+Reading the message: `E404`/`E403` with "not permitted" almost always means the trusted
+publisher is missing `npm publish` under *Allowed actions*, or the workflow filename in
+the npmjs form does not match `publish.yml` exactly.
