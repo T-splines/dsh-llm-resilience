@@ -138,7 +138,7 @@ entry**，不要再 `insert` 一份。在 `$DSH_HOME/profiles/<profile>/cordis.p
         enabled: true
         background: false
         timeoutMs: 10000
-        maxTokens: 1
+        maxTokens: 256
         prompt: 'ping'
       stateFile: '$DSH_HOME/storages/llm-resilience/state.json'
     limits:
@@ -234,13 +234,14 @@ half-open --(探活失败)--> 再锁一轮
 half-open --(探活无定论)--> 解锁，交回真实流量判断
 ```
 
-- 探活是**一次性判断，不追求绝对准确**：它只发一句 `ping`、预算 `probe.maxTokens`
-  （默认 1），所以推理模型可能把预算全花在思考上、返回空内容（`EMPTY_RESPONSE`），
-  个别 provider 干脆拒绝这种退化请求（`INVALID_REQUEST`）。这些 code 描述的是**探针
-  本身**，不是 target 的健康状况；按失败处理会让恢复检测永远失败，健康 provider 被自
-  己的探针锁死。此类结果记为「无定论」，直接解锁并把判断交回真实请求——连败计数保持
-  满值，真实请求再失败一次就重新上锁。网关包装的上游故障（`400 code=upstream_error`）
-  例外：它同时说明真实请求也会失败，仍然继续锁。
+- 探活默认给 `maxTokens: 256`，不是 1。实测（stream 模式）`max_tokens: 1` 时推理模型
+  会把预算全花在思考上、返回空内容，pi-ai 判 `EMPTY_RESPONSE`；`64` 才稳定出 content。
+  探针太小时恢复检测永远失败，健康 provider 被自己的探针锁死（0.5.6 修的就是这个）。
+- 即便如此，探针仍可能因为「自身太简陋」而失败（返回空内容 `EMPTY_RESPONSE`、个别
+  provider 拒绝退化请求 `INVALID_REQUEST`）。这些 code 描述的是**探针本身**，不是
+  target 的健康状况：此类结果记为「无定论」，直接解锁并把判断交回真实请求。真坏的
+  target 重新攒满 `failureThreshold` 次真实失败就会再锁。网关包装的上游故障
+  （`400 code=upstream_error`）例外：它同时说明真实请求也会失败，仍然继续锁。
 - 状态按 `provider + model` 记账，不按 provider 整体记账。
 - `stateFile` 用锁 + 读-合并-写原子更新；并发进程取锁更晚/连败更多的条目；成功清除写
   tombstone，旧锁不会被复活。

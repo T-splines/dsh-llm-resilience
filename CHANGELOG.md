@@ -17,14 +17,18 @@ All notable changes to this project are documented here. The format follows
   missing field) carry none of those markers and still fail fast. Explicit
   `codeActions.INVALID_REQUEST` overrides still win.
 
-- **An inconclusive health probe no longer re-locks a healthy target.** The probe sends
-  one `ping` with `maxTokens: 1`; a reasoning model spends that whole budget thinking and
-  returns no content (`EMPTY_RESPONSE`), and some providers reject degenerate requests
-  (`INVALID_REQUEST`). Those codes describe the probe, not the target — so the recovery
-  check could never succeed and a healthy provider stayed locked for another `lockMs`
-  every hour, forever. Such results are now *inconclusive*: the lock is released and real
-  traffic decides. The failure counter stays at its threshold, so the next real failure
-  re-locks immediately. Gateway-wrapped upstream faults remain conclusive.
+- **The health probe can now actually succeed.** It defaulted to `maxTokens: 1`, which a
+  reasoning model spends entirely on thinking: the response comes back empty, pi-ai reports
+  `EMPTY_RESPONSE`, and the probe declares a healthy target broken. Measured in stream
+  mode: `1` and `16` → `finish_reason=length` with no content; `64` → content (non-stream
+  DeepSeek needs ~256). The default is now `256`. Without this the recovery path was dead
+  code: the target re-locked every `lockMs`, forever.
+- **An inconclusive probe no longer re-locks a healthy target.** Even with a sane budget a
+  probe can fail for reasons that describe the probe, not the target (`EMPTY_RESPONSE`,
+  `INVALID_REQUEST` from providers that reject degenerate requests). Treating those as
+  failure means the recovery check can never succeed. They are now *inconclusive*: the lock
+  is released (same path as a successful probe, tombstone included) and real traffic
+  decides. Gateway-wrapped upstream faults stay conclusive — real requests hit them too.
 
 ### Added
 

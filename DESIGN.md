@@ -76,7 +76,7 @@ for attempt of attempts (chain order):
   if state == open: skip
   if state == half-open:
       if !breaker.beginProbe(key): skip
-      probe = minimal chat (maxTokens=1, timeoutMs)
+      probe = small chat (maxTokens=256, timeoutMs)
       if probe fails: breaker.probeFailed(key); continue to next target
       # A successful probe does not close the breaker immediately:
       # the real request must succeed before recordSuccess().
@@ -192,19 +192,23 @@ half-open --(probe is inconclusive)--> closed; real traffic decides
 - Open/probing targets are skipped; half-open targets require the single probe slot.
 - `enabled: false` targets are filtered before validation and planning; they keep their
   configuration but do not participate in the chain.
-- The probe is a minimal chat request (`maxTokens: 1`, short prompt, `timeoutMs`). Do not
+- The probe is a small chat request (`maxTokens: 256`, short prompt, `timeoutMs`). Do not
   use `/v1/models` as a health check: a gateway can fail `/models` because of entitlement
   while chat is fine, or vice versa.
-- **A minimal probe cannot judge a target.** With `maxTokens: 1` a reasoning model spends
-  the whole budget thinking and returns no content (`EMPTY_RESPONSE`); some providers
-  reject degenerate requests outright (`INVALID_REQUEST`). Those codes describe the probe,
-  not the target's health — treating them as failure means the recovery check can *never*
-  succeed, and a perfectly healthy provider stays locked until someone deletes the state
-  file. `isConclusiveProbeFailure()` (policy.js) makes them *inconclusive*:
+- **A minimal probe cannot judge a target.** Measured in stream mode: `max_tokens: 1` and
+  `16` return `finish_reason=length` with no content; `64` is the first value that
+  reliably produces content (non-streaming DeepSeek needs ~256). So the default is 256 —
+  a probe that always returns empty would report `EMPTY_RESPONSE` forever. Even so, a
+  probe can fail for reasons that describe the *probe*, not the target
+  (`EMPTY_RESPONSE`, `INVALID_REQUEST` from providers that reject degenerate requests).
+  Treating those as failure means the recovery check can *never* succeed, and a perfectly
+  healthy provider stays locked until someone deletes the state file.
+  `isConclusiveProbeFailure()` (policy.js) makes them *inconclusive*:
   `breaker.probeInconclusive()` drops the lock and hands the decision back to real
   traffic, keeping the failure counter at its threshold so the very next real failure
   re-locks. Gateway-wrapped upstream faults stay conclusive: real requests hit them too.
-  If you raise `probe.maxTokens`, keep the probe small — it runs on every lock expiry.
+  The probe runs on every lock expiry, so keep it small — but not so small that
+  reasoning models spend the whole budget thinking.
 - `breaker.probe.background: true` makes the current request skip a half-open target and
   probes in the background; the next request uses the result.
 - `stateFile` persistence uses `stateFile.lock` + read-merge-write (temp file + rename).

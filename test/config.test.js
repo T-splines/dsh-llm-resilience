@@ -46,7 +46,9 @@ test('默认配置：dormant、Go 友好的重试默认值、探活默认值', (
 	assert.equal(resolved.breaker.lockMs, 3600000);
 	assert.equal(resolved.breaker.probe.enabled, true);
 	assert.equal(resolved.breaker.probe.background, false);
-	assert.equal(resolved.breaker.probe.maxTokens, 1);
+	// 探活预算必须够出 content：maxTokens=1 时推理模型返回空内容，
+	// 探针会永远判 target 不健康（见 CHANGELOG 0.5.6）。
+	assert.equal(resolved.breaker.probe.maxTokens, 256);
 	assert.equal(resolved.limits.maxTotalMs, 600000);
 	assert.equal(resolved.limits.maxAttempts, 50);
 	assert.deepEqual(resolved.runtime, { version: 0, updatedAt: 0, targets: [] });
