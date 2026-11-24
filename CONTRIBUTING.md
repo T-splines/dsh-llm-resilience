@@ -96,3 +96,21 @@ curl -s "https://api.github.com/repos/T-splines/dsh-llm-resilience/check-runs/$J
 Reading the message: `E404`/`E403` with "not permitted" almost always means the trusted
 publisher is missing `npm publish` under *Allowed actions*, or the workflow filename in
 the npmjs form does not match `publish.yml` exactly.
+
+The workflow also POSTs the OIDC token straight to the endpoint npm itself uses
+(`/-/npm/v1/oidc/token/exchange/package/<name>`) and prints the registry's answer for
+**all three** `@magic6` packages. That single probe splits the otherwise identical
+failures apart:
+
+| Exchange result | Meaning |
+|:--|:--|
+| `200` + token | the OIDC chain and the trusted publisher both match |
+| `404 {"message":"OIDC token exchange error - package not found"}` | npm has **no trusted publisher record** for that package — it is not about tokens, npm version, or `id-token: write` |
+| `401 unauthorized` | the OIDC token itself was rejected (audience, permissions, self-hosted runner) |
+
+`404 ... package not found` is the one that wasted an hour here: the message says
+"package not found" but the package is on the registry and public. It means the *trusted
+publisher* was not found. Confirm from an authenticated shell with
+`npm trust list @magic6/<name>` (npm ≥ 11.15, needs an interactive `npm login`), which
+prints the exact repository, workflow filename and environment npm has on file —
+compare those three strings with what the workflow's OIDC claims say.
