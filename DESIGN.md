@@ -185,7 +185,8 @@ State machine per `provider + model`:
 closed --(failureThreshold consecutive failures)--> open
 open --(now >= lockedUntil)--> half-open
 half-open --(beginProbe wins + probe succeeds)--> closed on next real success
-half-open --(probe fails)--> open for another lockMs
+half-open --(probe fails conclusively)--> open for another lockMs
+half-open --(probe is inconclusive)--> closed; real traffic decides
 ```
 
 - Open/probing targets are skipped; half-open targets require the single probe slot.
@@ -194,6 +195,16 @@ half-open --(probe fails)--> open for another lockMs
 - The probe is a minimal chat request (`maxTokens: 1`, short prompt, `timeoutMs`). Do not
   use `/v1/models` as a health check: a gateway can fail `/models` because of entitlement
   while chat is fine, or vice versa.
+- **A minimal probe cannot judge a target.** With `maxTokens: 1` a reasoning model spends
+  the whole budget thinking and returns no content (`EMPTY_RESPONSE`); some providers
+  reject degenerate requests outright (`INVALID_REQUEST`). Those codes describe the probe,
+  not the target's health — treating them as failure means the recovery check can *never*
+  succeed, and a perfectly healthy provider stays locked until someone deletes the state
+  file. `isConclusiveProbeFailure()` (policy.js) makes them *inconclusive*:
+  `breaker.probeInconclusive()` drops the lock and hands the decision back to real
+  traffic, keeping the failure counter at its threshold so the very next real failure
+  re-locks. Gateway-wrapped upstream faults stay conclusive: real requests hit them too.
+  If you raise `probe.maxTokens`, keep the probe small — it runs on every lock expiry.
 - `breaker.probe.background: true` makes the current request skip a half-open target and
   probes in the background; the next request uses the result.
 - `stateFile` persistence uses `stateFile.lock` + read-merge-write (temp file + rename).

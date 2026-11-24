@@ -1127,3 +1127,101 @@ test('链路主动停下（请求真坏）时写一条可追的会话记录', as
 		{ kind: 'stop', target: 'p1/m1', code: 'INVALID_REQUEST', reason: 'request-invalid' },
 	]);
 });
+
+test('网关包装的 400 计入熔断：达到阈值后锁 1 小时、期间跳过、到期后台探活成功即恢复', async () => {
+	// 线上 2026-11-24 的完整期望路径：eco 连续数个请求都返回包装 400 →
+	// 熔断开锁 1 小时 → 期间所有请求绕过 eco 直接用下一个 target →
+	// 锁到期后后台探活，成功即重新参与链。这条测试钉住整条路径。
+	const wrapped = [
+		errorChunk(
+			'INVALID_REQUEST',
+			'400: {"message":"[code=upstream_error] The request could not be completed.","type":"upstream_error","code":"upstream_error"}',
+		),
+	];
+	let clock = 1_000_000;
+	const llm = createLlm({
+		// 前 3 次真实请求都撞包装 400；第 4 次是探活（maxTokens=1），恢复；
+		// 之后恢复正常输出。
+		'p1/m1': [wrapped, wrapped, wrapped, okAttempt('pong'), okAttempt('primary-again')],
+		'p2/m2': [okAttempt('b1'), okAttempt('b2'), okAttempt('b3'), okAttempt('b4'), okAttempt('b5')],
+	});
+	const config = makeConfig([target('p1', 'm1', { maxRetries: 5 }), target('p2', 'm2')], {
+		breaker: {
+			failureThreshold: 3,
+			lockMs: 3_600_000,
+			probe: { enabled: true, background: true, timeoutMs: 1000, maxTokens: 1, prompt: 'ping' },
+		},
+	});
+	const { adapter } = makeAdapter(config, llm, { now: () => clock });
+
+	// 三次请求：每次 eco 撞包装 400 → 立刻 fallback（不消耗重试预算）→ 由 m2 交付。
+	for (let i = 0; i < 3; i += 1) {
+		const chunks = await collect(adapter.stream(streamOptions));
+		assert.equal(chunks.at(-1).reason.kind, 'stop', `request ${i + 1} should succeed via the backup`);
+	}
+	assert.equal(adapter.breaker.state('p1\u0000m1'), 'open');
+	// 包装 400 是 fallback 动作：不重试同一个 target，所以 eco 只被打了 3 次。
+	assert.equal(llm.calls.filter((call) => call.provider === 'p1' && call.maxTokens !== 1).length, 3);
+	assert.equal(llm.calls.filter((call) => call.provider === 'p2').length, 3);
+
+	// 锁未到期：直接跳过 eco，一次都不打。
+	clock += 3_599_999;
+	await collect(adapter.stream(streamOptions));
+	assert.equal(llm.calls.filter((call) => call.provider === 'p1' && call.maxTokens !== 1).length, 3);
+	assert.equal(adapter.breaker.state('p1\u0000m1'), 'open');
+
+	// 锁到期：本次请求跳过 eco 并在后台探活；探活成功后 eco 重新可用。
+	clock += 2;
+	await collect(adapter.stream(streamOptions));
+	await new Promise((resolve) => setTimeout(resolve, 20));
+	assert.ok(
+		llm.calls.some((call) => call.provider === 'p1' && call.maxTokens === 1),
+		'the expired lock should trigger a background probe',
+	);
+	assert.equal(adapter.breaker.state('p1\u0000m1'), 'closed');
+
+	const recovered = await collect(adapter.stream(streamOptions));
+	assert.equal(recovered.at(-1).reason.kind, 'stop');
+	assert.equal(llm.calls.filter((call) => call.provider === 'p1' && call.maxTokens !== 1).length, 4);
+});
+
+test('探活遇到「探针自身局限」的错误时不把健康 provider 永久锁死', async () => {
+	// maxTokens:1 的探针本身就可能失败：有的 provider 对 1 token 返回 stop+空内容
+	// （pi-ai 判 EMPTY_RESPONSE），有的直接拒绝。它们不是 target 不健康。
+	for (const code of ['EMPTY_RESPONSE', 'INVALID_REQUEST']) {
+		let clock = 1000;
+		const llm = createLlm({
+			'p1/m1': [
+				[errorChunk('SERVER', 'down')],
+				// 锁到期后的探针：报的是「探针请求本身」的问题
+				[errorChunk(code, 'probe artifact')],
+				okAttempt('real traffic recovered'),
+			],
+			'p2/m2': [okAttempt('b1'), okAttempt('b2')],
+		});
+		const { adapter } = makeAdapter(
+			makeConfig([target('p1', 'm1'), target('p2', 'm2')], {
+				breaker: {
+					failureThreshold: 1,
+					lockMs: 1000,
+					probe: { enabled: true, background: false, timeoutMs: 1000, maxTokens: 1, prompt: 'ping' },
+				},
+			}),
+			llm,
+			{ now: () => clock },
+		);
+
+		await collect(adapter.stream(streamOptions));
+		assert.equal(adapter.breaker.state('p1\u0000m1'), 'open', `${code}: first failure locks`);
+
+		clock += 1001;
+		const chunks = await collect(adapter.stream(streamOptions));
+		assert.equal(chunks.at(-1).reason.kind, 'stop', `${code}: request still succeeds`);
+		// 关键：探针无定论 ≠ 重新上锁；p1 应该在本轮就被真实请求试用。
+		assert.equal(
+			llm.calls.filter((call) => call.provider === 'p1' && call.maxTokens !== 1).length,
+			2,
+			`${code}: the real request must reach p1 again after an inconclusive probe`,
+		);
+	}
+});

@@ -231,8 +231,16 @@ closed --(连续 failureThreshold 次失败)--> open
 open --(lock 到期)--> half-open
 half-open --(探活成功)--> 下一次真实请求成功后 closed
 half-open --(探活失败)--> 再锁一轮
+half-open --(探活无定论)--> 解锁，交回真实流量判断
 ```
 
+- 探活是**一次性判断，不追求绝对准确**：它只发一句 `ping`、预算 `probe.maxTokens`
+  （默认 1），所以推理模型可能把预算全花在思考上、返回空内容（`EMPTY_RESPONSE`），
+  个别 provider 干脆拒绝这种退化请求（`INVALID_REQUEST`）。这些 code 描述的是**探针
+  本身**，不是 target 的健康状况；按失败处理会让恢复检测永远失败，健康 provider 被自
+  己的探针锁死。此类结果记为「无定论」，直接解锁并把判断交回真实请求——连败计数保持
+  满值，真实请求再失败一次就重新上锁。网关包装的上游故障（`400 code=upstream_error`）
+  例外：它同时说明真实请求也会失败，仍然继续锁。
 - 状态按 `provider + model` 记账，不按 provider 整体记账。
 - `stateFile` 用锁 + 读-合并-写原子更新；并发进程取锁更晚/连败更多的条目；成功清除写
   tombstone，旧锁不会被复活。

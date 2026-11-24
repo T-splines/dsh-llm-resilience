@@ -489,3 +489,56 @@ test('包装识别只作用于 4xx 派生的 INVALID_REQUEST，不改变 500 的
 	const plainServer = { code: 'SERVER', message: '500: {"code":"internal_error","message":"boom"}' };
 	assert.equal(classifyFailure(plainServer).action, ACTIONS.RETRY);
 });
+
+test('探活是否「有定论」：探针自身局限不算 target 病理证据', async () => {
+	const { isConclusiveProbeFailure } = await import('../lib/policy.js');
+
+	// 无定论：探针只有 1 token、内容是一句 ping，这些 code 描述的是探针本身。
+	for (const code of ['EMPTY_RESPONSE', 'INVALID_REQUEST', 'MALFORMED_RESPONSE']) {
+		assert.equal(isConclusiveProbeFailure({ code, message: 'probe artifact' }), false, code);
+	}
+
+	// 有定论：真实请求同样会撞上，必须继续锁。
+	assert.equal(isConclusiveProbeFailure({ code: 'SERVER', message: 'down' }), true);
+	assert.equal(isConclusiveProbeFailure({ code: 'AUTH', message: 'bad key' }), true);
+	assert.equal(isConclusiveProbeFailure({ code: 'EMPTY_RESPONSE', message: '' }), false);
+
+	// 例外：网关包装的上游故障即使在无定论集合里，也是明确的 target 病理证据。
+	assert.equal(
+		isConclusiveProbeFailure({
+			code: 'INVALID_REQUEST',
+			message: '400: {"message":"[code=upstream_error] The request could not be completed.","code":"upstream_error"}',
+		}),
+		true,
+	);
+});
+
+test('probeInconclusive 和探活成功同路径：解锁并写 tombstone，旧锁不会被合并复活', async () => {
+	const { CircuitBreaker, BREAKER_STATES } = await import('../lib/policy.js');
+	let now = 1000;
+	const breaker = new CircuitBreaker({ failureThreshold: 1, lockMs: 500, now: () => now });
+	const key = 'p\u0000m';
+
+	breaker.recordFailure(key);
+	assert.equal(breaker.state(key), BREAKER_STATES.OPEN);
+
+	now += 501;
+	assert.equal(breaker.state(key), BREAKER_STATES.HALF_OPEN);
+	assert.equal(breaker.beginProbe(key), true);
+	assert.equal(breaker.state(key), BREAKER_STATES.PROBING);
+
+	breaker.probeInconclusive(key);
+	assert.equal(breaker.state(key), BREAKER_STATES.CLOSED, 'inconclusive probe releases the lock');
+	// tombstone 是关键：跨进程合并靠 cleared 压制别人磁盘上的旧锁。
+	assert.ok(breaker.tombstones.has(key), 'inconclusive probe must leave a tombstone');
+
+	// 另一进程磁盘上那份更晚的旧锁，不能把这里的解锁顶回去。
+	const staleLock = {
+		version: 1,
+		entries: { [key]: { failures: 1, lockedUntil: now + 999_999, locks: 1, updatedAt: now - 1 } },
+		cleared: {},
+	};
+	const { mergeBreakerSnapshots } = await import('../lib/policy.js');
+	const merged = mergeBreakerSnapshots(staleLock, breaker.snapshot());
+	assert.equal(merged.entries[key], undefined, 'the tombstone wins over a stale lock');
+});

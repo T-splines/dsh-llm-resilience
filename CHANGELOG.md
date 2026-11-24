@@ -17,6 +17,15 @@ All notable changes to this project are documented here. The format follows
   missing field) carry none of those markers and still fail fast. Explicit
   `codeActions.INVALID_REQUEST` overrides still win.
 
+- **An inconclusive health probe no longer re-locks a healthy target.** The probe sends
+  one `ping` with `maxTokens: 1`; a reasoning model spends that whole budget thinking and
+  returns no content (`EMPTY_RESPONSE`), and some providers reject degenerate requests
+  (`INVALID_REQUEST`). Those codes describe the probe, not the target — so the recovery
+  check could never succeed and a healthy provider stayed locked for another `lockMs`
+  every hour, forever. Such results are now *inconclusive*: the lock is released and real
+  traffic decides. The failure counter stays at its threshold, so the next real failure
+  re-locks immediately. Gateway-wrapped upstream faults remain conclusive.
+
 ### Added
 
 - A `plugin:llm-fallback` session record (`kind: "stop"`) whenever the chain
@@ -24,6 +33,9 @@ All notable changes to this project are documented here. The format follows
   and the classification reason. The host mounts no console exporter for
   `ctx.logger`, so without this record "why did it not fail over" was
   unanswerable from logs.
+- `kind: "probe"` records now distinguish `phase: "failed"` from
+  `phase: "inconclusive"`, so "the target came back but our probe was too dumb to see
+  it" is visible instead of looking like another failure.
 
 ### Changed
 
