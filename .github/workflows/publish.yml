@@ -127,10 +127,23 @@ jobs:
           fi
           # 只打 claims，不打 token 本身。同时抛成 annotation：
           # GitHub 的 job log 要 admin 权限才能下载，annotation 才是外部可读的通道。
-          CLAIMS="$(node -e 'const p=JSON.parse(Buffer.from(process.argv[1].split(".")[1],"base64url").toString());console.log(JSON.stringify({aud:p.aud,repository:p.repository,ref:p.ref,job_workflow_ref:p.job_workflow_ref}))' "${ID_TOKEN}")"
+          CLAIMS="$(node -e 'const p=JSON.parse(Buffer.from(process.argv[1].split(".")[1],"base64url").toString());console.log(JSON.stringify({aud:p.aud,sub:p.sub,repository:p.repository,ref:p.ref,job_workflow_ref:p.job_workflow_ref}))' "${ID_TOKEN}")"
           echo "oidc claims: ${CLAIMS}"
           echo "::warning::OIDC claims => ${CLAIMS}"
           echo "::warning::npm 侧必须与此一致：Organization or user=T-splines, Repository=dsh-llm-resilience, Workflow filename=publish.yml, Environment=（留空）"
+
+          # sub 是 npm 匹配 trusted publisher 时真正比对的 claim。
+          # GitHub 自 2026-07-15 起对新仓库启用 immutable subject claim，
+          # 形状从 repo:OWNER/REPO:... 变成 repo:OWNER@ID/REPO@ID:...。
+          # npm registry 侧匹配不上就统一回 "package not found"（npm/cli#9969）。
+          SUB_CHECK="$(node -e '
+            const p = JSON.parse(Buffer.from(process.argv[1].split(".")[1],"base64url").toString());
+            const m = /^repo:([^/]+)\//.exec(p.sub || "");
+            const immutable = !!m && m[1].includes("@");
+            console.log(JSON.stringify({ sub: p.sub, immutable_subject: immutable }));
+          ' "${ID_TOKEN}")"
+          echo "sub claim: ${SUB_CHECK}"
+          echo "::warning::sub claim => ${SUB_CHECK}"
 
           # 同时探另外两个包：如果它们 200 而本包 404，说明 trusted publisher 配到了
           # 别的包上（或本包的 workflow 文件名/环境对不上），一眼就能区分。
