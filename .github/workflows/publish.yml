@@ -53,7 +53,6 @@ jobs:
           node-version: '24'
           # 让 npm 知道 registry；不要设置 token —— OIDC 路径要求完全无凭据。
           registry-url: 'https://registry.npmjs.org'
-          cache: ''
 
       - name: Verify npm CLI supports trusted publishing (>= 11.5.1)
         shell: bash
