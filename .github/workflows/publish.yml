@@ -112,7 +112,11 @@ jobs:
           # 比反复猜「ENEEDAUTH 是 id-token 权限还是 trusted publisher 没配」快得多：
           # 这个端点 404/401 => 包里没有匹配的 trusted publisher；200 + token => 配置是对的。
           PKG="$(node -p "require('./package.json').name")"
-          ESCAPED="$(node -e 'console.log(encodeURIComponent(process.argv[1]).replace("%40","@"))' "${PKG}")"
+          # 用 npm 自己的转义规则（npa.escapedName），不要手搓 encodeURIComponent：
+          # npa 产出小写 %2f，手搓是大写 %2F。路由大小写敏感时这个差别会伪装成
+          # 「package not found」，把人骗去重配 trusted publisher。
+          ESCAPED="$(npm exec --yes --silent --package=npm-package-arg -- node -e 'import("npm-package-arg").then(({default:npa})=>console.log(npa(process.argv[1]).escapedName))' "${PKG}" 2>/dev/null \
+            || node -e 'console.log(process.argv[1].replace("/","%2f"))' "${PKG}")"
           echo "package=${PKG} escaped=${ESCAPED}"
 
           ID_TOKEN="$(curl -sS --fail "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=npm:registry.npmjs.org" \
@@ -131,7 +135,8 @@ jobs:
           # 同时探另外两个包：如果它们 200 而本包 404，说明 trusted publisher 配到了
           # 别的包上（或本包的 workflow 文件名/环境对不上），一眼就能区分。
           for OTHER in "@magic6/dsh-web-fallback-chain" "@magic6/dsh-compaction-policy-engine" "@magic6/dsh-llm-resilience"; do
-            ESC="$(node -e 'console.log(encodeURIComponent(process.argv[1]).replace("%40","@"))' "${OTHER}")"
+            ESC="${OTHER/@/%40}"
+            ESC="${ESC/\//%2f}"
             CODE="$(curl -sS -o /tmp/x.json -w '%{http_code}' -X POST \
               "https://registry.npmjs.org/-/npm/v1/oidc/token/exchange/package/${ESC}" \
               -H "Authorization: Bearer ${ID_TOKEN}" || true)"
