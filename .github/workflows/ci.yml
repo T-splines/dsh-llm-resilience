@@ -53,6 +53,8 @@ jobs:
           # 阶段就被拒绝。单元测试矩阵仍覆盖 20/22，这里只负责真宿主。
           node-version: 24
       - run: npm install --no-audit --no-fund
+      # dsh plugin add 会把参数原样转给 pnpm；runner 默认没有。
+      - run: npm install --global pnpm@11
       # 装一个确定版本的 dsh 供 e2e 使用，避免 runner 上恰好没有。
       - run: npm install --global @deepseek-ai/dsh@0.2.2-rc.5
       - name: Run e2e scenarios

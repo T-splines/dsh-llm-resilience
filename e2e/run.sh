@@ -55,8 +55,14 @@ prepare() {
 
 	# 插件装进这个临时 profile —— 用 registry 上的版本，验证的是「用户装到的东西」，
 	# 不是工作区里的源码。想测源码就设 PLUGIN_SPEC="$REPO"。
-	( cd "$prof" && "$DSH_BIN" plugin --profile headless add "$PLUGIN_SPEC" >/dev/null 2>&1 ) \
-		|| { echo "插件安装失败: $PLUGIN_SPEC" >&2; exit 1; }
+	# 安装失败时必须看得到 dsh/pnpm 的原话；吞掉输出会让 CI 只剩一句
+	# 「插件安装失败」，无法区分网络、权限、engines、缺 pnpm。
+	local install_log="$WORK/plugin-install.log"
+	if ! ( cd "$prof" && "$DSH_BIN" plugin --profile headless add "$PLUGIN_SPEC" ) >"$install_log" 2>&1; then
+		echo "插件安装失败: $PLUGIN_SPEC" >&2
+		cat "$install_log" >&2
+		exit 1
+	fi
 
 	cat > "$prof/cordis.patch.yml" <<YAML
 # 端到端场景专用 profile：两个假 provider + resilience 链。
