@@ -174,9 +174,15 @@ const server = createServer(async (req, res) => {
 					object: 'chat.completion.chunk',
 					created: Math.floor(Date.now() / 1000),
 					model: 'fake-model',
-					choices: [{ index: 0, delta: { role: 'assistant', content: 'partial' }, finish_reason: null }],
+					choices: [{ index: 0, delta: { role: 'assistant', content: 'PARTIAL-FROM-A' }, finish_reason: null }],
 				})}\n\n`,
 			);
+			// 关键：**不发** `[DONE]`、也不发 `finish_reason`，直接断连接。
+			// 这才是线上那种「流到一半上游断了」的形状。若在这里补发 [DONE]，
+			// pi-ai 会认为流正常结束 —— 那就变成另一个测试了。
+			// 先让这一帧真的出去再断：立刻 destroy 时对端一帧都收不到，
+			// 链会走「还没开始就断了」的分支，同样不是要测的东西。
+			await new Promise((resolve) => setTimeout(resolve, 150));
 			res.destroy();
 			return;
 

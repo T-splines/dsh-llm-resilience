@@ -131,8 +131,11 @@ YAML
 # ── 单个场景 ────────────────────────────────────────────────────────────────
 # $1 名称  $2 fake-a 脚本  $3 fake-b 脚本  $4 期望作答者（8799 / 8798 / error）
 # $5 期望 fake-b 被请求数（用于断言「没有 fallback」；- 表示不检查）
+# $6 期望错误码（仅 expect_src=error 时检查；- 表示不检查）
+# $7 期望出现在输出里的片段（- 表示不检查）
 run_case() {
 	local name="$1" a_script="$2" b_script="$3" expect_src="$4" expect_b="$5"
+	local expect_code="${6:--}" expect_text="${7:--}"
 	rm -f "$STATE" "$WORK"/fake-*.log
 
 	_start_servers "$a_script" "$b_script"
@@ -155,6 +158,12 @@ run_case() {
 		8798) grep -q "pong-from-$PORT_B" <<<"$out" || problems+=("期望 fake-b 作答，实际: $(head -c 120 <<<"$out")") ;;
 		error) [ "$code" -ne 0 ] || problems+=("期望失败，实际成功: $(head -c 120 <<<"$out")") ;;
 	esac
+	if [ "$expect_code" != "-" ]; then
+		grep -q "dsh: $expect_code" <<<"$out" || problems+=("期望错误码 $expect_code，实际: $(head -c 120 <<<"$out")")
+	fi
+	if [ "$expect_text" != "-" ]; then
+		grep -qF "$expect_text" <<<"$out" || problems+=("输出里缺片段 '$expect_text': $(head -c 160 <<<"$out")")
+	fi
 	if [ "$expect_b" != "-" ] && [ "$b_hits" != "$expect_b" ]; then
 		problems+=("fake-b 期望被请求 $expect_b 次，实际 $b_hits 次")
 	fi
@@ -184,6 +193,63 @@ _stop_servers() {
 }
 _answer() {
 	( cd "$WORK" && "$DSH_BIN" --profile headless headless "reply with exactly: pong" 2>&1 )
+}
+
+# ── 探活失败 -> 重新锁 ──────────────────────────────────────────────────────
+run_probe_refail() {
+	local name="探活失败 -> 重新锁一轮（不是放行）"
+	rm -f "$STATE" "$WORK"/fake-*.log
+	local problems=()
+
+	# 第 1 轮：打满阈值
+	_start_servers "500,500,500,500,500" "ok"; local o1; o1="$(_answer)"; _stop_servers
+	grep -q "pong-from-$PORT_B" <<<"$o1" || problems+=("第 1 轮未 fallback")
+
+	# 第 2 轮：锁过期后，探活本身也失败 -> 必须重新锁，而不是把 target 放回来
+	sleep 3.5
+	_start_servers "500" "ok"; local o2; o2="$(_answer)"; _stop_servers
+	grep -q "pong-from-$PORT_B" <<<"$o2" || problems+=("探活失败后本轮不该用 fake-a")
+
+	# 第 3 轮：重新锁上之后，fake-a 不该被请求
+	_start_servers "ok" "ok"; local o3; o3="$(_answer)"; _stop_servers
+	local hits3; hits3="$(grep -c 'action=' "$WORK/fake-a.log" 2>/dev/null | tr -d '\n')"
+	: "${hits3:=0}"
+	[ "$hits3" = "0" ] || problems+=("探活失败并被重新锁上后，fake-a 仍被请求 $hits3 次")
+	grep -q "pong-from-$PORT_B" <<<"$o3" || problems+=("第 3 轮未用 fake-b")
+
+	if [ "${#problems[@]}" -eq 0 ]; then ok "$name"; else
+		bad "$name"; local p; for p in "${problems[@]}"; do printf '      %s\n' "$p"; done
+	fi
+}
+
+# ── 内容已交付后断流 -> 宿主整步重放，不把两段内容拼给用户 ────────────────────
+#
+# 这里断言的东西和直觉相反，值得写清楚：fake-b **确实**会被请求，而且这是对的。
+# `result.delivered` 为真时插件不原地换 target（那会把两段内容拼起来），而是
+# 抛给宿主做整步重放；宿主重放同一步时，链按之前的记录跳过 fake-a、走 fake-b。
+# 所以正确的断言不是「fake-b 一次不许被请求」，而是：
+#   1. 用户最终看到的**只有一份**内容，且不含 fake-a 那段半成品；
+#   2. fake-a 的本次请求没有静默重试（内容已交付时重试同样会重复）。
+run_drop_after_delivery() {
+	local name="内容已交付后断流 -> 交宿主整步重放，用户只看到一份完整内容"
+	rm -f "$STATE" "$WORK"/fake-*.log
+	local problems=()
+
+	_start_servers "drop" "ok"; local out; out="$(_answer)"; _stop_servers
+
+	if grep -q 'PARTIAL-FROM-A' <<<"$out"; then
+		problems+=("用户看到了 fake-a 那半截内容（应该由宿主丢弃）: $(head -c 120 <<<"$out")")
+	fi
+	grep -q "pong-from-$PORT_B" <<<"$out" || problems+=("重放后没有走到 fake-b: $(head -c 120 <<<"$out")")
+	# 只允许一份内容：两个 target 的正文不能同时出现
+	local n_a n_b
+	n_a=$(grep -c 'PARTIAL-FROM-A' <<<"$out" || true)
+	n_b=$(grep -c "pong-from-$PORT_B" <<<"$out" || true)
+	[ "${n_a:-0}" = "0" ] && [ "${n_b:-0}" = "1" ] || problems+=("内容不是恰好一份（A=$n_a 次, B=$n_b 次）")
+
+	if [ "${#problems[@]}" -eq 0 ]; then ok "$name"; else
+		bad "$name"; local p; for p in "${problems[@]}"; do printf '      %s\n' "$p"; done
+	fi
 }
 
 # ── 跨轮次场景：熔断锁 -> 跳过 -> 到期探活恢复 ───────────────────────────────
@@ -236,7 +302,7 @@ PY
 	fi
 }
 
-SCENARIOS=(baseline upstream400 genuine400 transient500 exhausted malformed breaker)
+SCENARIOS=(baseline upstream400 genuine400 transient500 exhausted malformed probe-refail drop breaker)
 
 main() {
 	section "准备：独立 DSH_HOME + 临时 profile + 装插件"
@@ -260,10 +326,17 @@ main() {
 		run_case "瞬时 500 -> 重试后 fallback" 500 ok 8798 -
 	fi
 	if [ -z "$only" ] || [ "$only" = exhausted ]; then
-		run_case "全部 target 都失败 -> FALLBACK_EXHAUSTED（保留最后一次真实失败）" 500 500 error -
+		run_case "全部 target 都失败 -> FALLBACK_EXHAUSTED 且保留最后一次真实失败" \
+		500 500 error - FALLBACK_EXHAUSTED "last: "
 	fi
 	if [ -z "$only" ] || [ "$only" = malformed ]; then
 		run_case "并行工具调用被拼成一个块（MALFORMED_RESPONSE）-> 不整轮作废" malformed-tools ok 8798 -
+	fi
+	if [ -z "$only" ] || [ "$only" = probe-refail ]; then
+		run_probe_refail
+	fi
+	if [ -z "$only" ] || [ "$only" = drop ]; then
+		run_drop_after_delivery
 	fi
 	if [ -z "$only" ] || [ "$only" = breaker ]; then
 		run_breaker_lifecycle

@@ -273,16 +273,20 @@ Implemented today (`e2e/run.sh --list`):
   message, budget not 1) while the turn still uses target 2 → the next turn uses target 1
   again and `entries` is empty.
 
+Plus `probe-refail` (a failed probe re-locks rather than letting the target back in) and
+`drop` (content delivered, then the stream dies: the host replays the step and the user
+sees exactly one copy of the content).
+
 Still to add (each is a known gap, not a claim):
 
-- all targets failing → `FALLBACK_EXHAUSTED` carrying the last real failure;
-- malformed tool call → buffer dropped and retried, host sees only the successful attempt;
-- lock expiry + *failed* probe → lock again;
-- text delivered then transport failure → host replays the step and skips that target;
-- settings card round-trip in a temporary web profile.
+- tool-call retry specifics — the host must see only the successful attempt, not the
+  buffered partial one (partly covered by `malformed`, which asserts the turn survives);
+- settings card round-trip in a temporary web profile — needs a browser, so it belongs to
+  a separate harness.
 
-The first two of those need a fake server that emits a malformed `tool_calls` stream; the
-last needs a browser, so it belongs to a separate harness.
+A `0.5.5` run of this suite fails 2 of the 9 scenarios; `0.5.8` passes all 9. That
+comparison is the acceptance rule for every new scenario: **if it cannot go red on the
+old version, it is not testing anything.**
 
 ## 12. Known limitations and open questions
 

@@ -1,6 +1,6 @@
 {
   "name": "@magic6/dsh-llm-resilience",
-  "version": "0.5.8",
+  "version": "0.5.9",
   "description": "Provider-level retry, fallback chains and persistent circuit breaking for DeepSeek Harness LLM routes — built for gateways that intermittently break tool-call streams or connections.",
   "type": "module",
   "main": "lib/index.js",

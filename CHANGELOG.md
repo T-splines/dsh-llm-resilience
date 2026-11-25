@@ -4,6 +4,29 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.5.9] - 2026-11-25
+
+### Added
+
+- Two more e2e scenarios, and a corrected one:
+  - `probe-refail` — a probe that fails must **re-lock** the target, not let it back in;
+  - `drop` — content delivered, then the stream dies. The turn is replayed by the host and
+    the user sees **exactly one** copy of the content.
+- `exhausted` now asserts the error code (`FALLBACK_EXHAUSTED`) and that the last real
+  failure survives in the message, not merely that the run failed.
+
+### Fixed
+
+- The `drop` scenario was asserting the wrong thing. It expected "target 2 must never be
+  contacted", but step replay legitimately contacts it: the plugin refuses to append a
+  second target's output after content was already delivered, hands the failure to the
+  host, and the replay skips the failed target. The assertion now checks what a user
+  actually experiences — one coherent answer, no half-finished prefix — instead of an
+  implementation detail. **A wrong assertion is worse than no test**: it reads as verified.
+
+  This also required fixing the fake server: `drop` used to send `[DONE]` before closing,
+  which pi-ai treats as a clean end, so the scenario never reached the branch it named.
+
 ## [0.5.8] - 2026-11-25
 
 ### Added
