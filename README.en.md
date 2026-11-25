@@ -289,6 +289,26 @@ global budgets, background probing, settings-client pure functions and the repla
 (including the legacy package name). End-to-end smoke runs on an isolated `DSH_HOME` with a
 fake OpenAI-compatible server are described in [DESIGN.md](DESIGN.md).
 
+## Tested platforms
+
+The suite is run, and passes, on every platform listed here — this is measured, not
+assumed:
+
+| Platform | Version | Result | How |
+|:--|:--|:--|:--|
+| macOS | 26.6.2 arm64 | ✅ 99/99 | full `npm test` on the machine |
+| Windows | 11 22631 x64 | ✅ 99/99 | full `npm test` on real hardware |
+| Linux | ubuntu-latest x64 | ✅ 99/99 | GitHub Actions (Node 20 / 22) |
+
+The Windows row was added on 2026-11-25, when CI ran `ubuntu-latest` only and most
+users were on Windows. This plugin's 99 cases passed on Windows on the first run, but the same
+exercise found two Windows-only test failures in `dsh-compaction-policy-engine` — so
+all three repositories got a `windows-latest` CI job instead of relying on luck.
+
+> Only platforms the suite has actually run on are listed. Absence here does not
+> mean "unsupported" — it means nobody has verified it yet. If you ran the suite
+> somewhere else, a PR adding the row is welcome.
+
 ## Compatibility and migration
 
 - DSH `0.2.1-rc.x` / `0.2.2-rc.x` (`engines.dsh` is `>=0.2.1-0 <0.3.0-0`), Node.js 20+.
@@ -300,6 +320,25 @@ fake OpenAI-compatible server are described in [DESIGN.md](DESIGN.md).
   keep using an older breaker file.
 - Replay envelopes from the old package name still unwrap (`dsh-llm-fallback` is accepted as
   a legacy kind).
+
+## Reporting a problem
+
+Open an issue — no need to work out first whether it is your configuration:
+
+- 🐞 **[Bug report](https://github.com/T-splines/dsh-llm-resilience/issues/new?template=bug_report.yml)**
+  — wrong behaviour, a crash, a chain that should have fallen back and did not, a
+  breaker that never recovers.
+- ❓ **[Config question](https://github.com/T-splines/dsh-llm-resilience/issues/new?template=config_question.yml)**
+  — it runs, but does not do what you configured.
+
+Four details usually decide the case, so include them if you can:
+
+1. plugin version and DSH version;
+2. operating system (Windows and macOS differ in path handling and file locking);
+3. the exact `code` and `message` — not a paraphrase;
+4. for a target the chain skipped, the breaker state file (`stateFile`).
+
+Security issues: please do not open a public issue — use [SECURITY.md](SECURITY.md).
 
 ## License
 

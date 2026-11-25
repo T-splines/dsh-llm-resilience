@@ -282,6 +282,24 @@ npm test
 与多进程合并、全局预算、后台探活、设置页纯函数，以及 replay 信封（含旧包名兼容）。
 隔离 `DSH_HOME` + 假 OpenAI-compatible server 的端到端冒烟见 [DESIGN.md](DESIGN.md)。
 
+## 支持的平台
+
+测试套件在下面这些环境里**实际跑过并通过**，不是「应该能跑」：
+
+| 平台 | 版本 | 结果 | 验证方式 |
+|:--|:--|:--|:--|
+| macOS | 26.6.2 arm64 | ✅ 99/99 | 本机全量 `npm test` |
+| Windows | 11 22631 x64 | ✅ 99/99 | 真机全量 `npm test` |
+| Linux | ubuntu-latest x64 | ✅ 99/99 | GitHub Actions（Node 20 / 22） |
+
+Windows 一行是 2026-11-25 加的：在那之前 CI 只跑 `ubuntu-latest`。本插件的
+99 个用例在真机上一次通过，但同一批验证在 `dsh-compaction-policy-engine`
+上抓出了两个只在 Windows 挂的测试 —— 所以三个仓库都加了 `windows-latest`
+CI 任务，而不是根据这一次的运气决定。
+
+> 只列跑过测试的平台。没在这里出现 ≠ 不支持，只是还没人验证过 ——
+> 如果你在别的平台跑通了，欢迎提 PR 把这一行补上。
+
 ## 兼容与迁移
 
 - DSH `0.2.1-rc.x` / `0.2.2-rc.x`（`engines.dsh` 为 `>=0.2.1-0 <0.3.0-0`）、Node.js 20+。
@@ -290,6 +308,24 @@ npm test
 - 默认熔断状态文件移到 `$DSH_HOME/storages/llm-resilience/state.json`；想继续用旧文件就显式
   设置 `stateFile`。
 - 旧包名写下的 replay 信封仍然可读（`dsh-llm-fallback` 作为 legacy kind 接受）。
+
+## 报告问题
+
+发现 bug 请直接开 issue —— 不用先确认是不是自己的配置问题，贴上来我们一起看：
+
+- 🐞 **[Bug report](https://github.com/T-splines/dsh-llm-resilience/issues/new?template=bug_report.yml)**
+  —— 行为不对、崩溃、该 fallback 没 fallback、熔断恢复不了。
+- ❓ **[Config question](https://github.com/T-splines/dsh-llm-resilience/issues/new?template=config_question.yml)**
+  —— 能跑，但行为和配置不一致。
+
+提 issue 时如果方便，附上这几样，通常当天就能定位：
+
+1. 插件版本与 DSH 版本；
+2. 操作系统（Windows 与 macOS 的路径和文件锁实现不同，行为确有差异，别省）；
+3. 原始的 `code` 和 `message`，不要转述；
+4. 如果链跳过了某个 target，附上熔断状态文件（`stateFile` 指向的那个）。
+
+安全相关问题请不要开公开 issue，按 [SECURITY.md](SECURITY.md) 私下报。
 
 ## 许可
 

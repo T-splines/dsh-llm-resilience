@@ -27,6 +27,14 @@ End-to-end smoke instructions are in [DESIGN.md](DESIGN.md).
 - Update `CHANGELOG.md` for user-visible changes and keep the top version in sync with
   `package.json`.
 
+
+## Reporting a bug you found
+
+Open an issue on this repository rather than keeping it in a chat log — the
+[bug report template](.github/ISSUE_TEMPLATE/bug_report.yml) asks for the four
+details that decide most cases, and the exchange/probe diagnostics in the section
+above are what turn "the publish failed" into a specific cause.
+
 ## Releasing
 
 npm has retired legacy (classic) tokens: since November 2025 only granular access
