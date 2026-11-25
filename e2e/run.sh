@@ -251,6 +251,32 @@ run_drop_after_delivery() {
 		bad "$name"; local p; for p in "${problems[@]}"; do printf '      %s\n' "$p"; done
 	fi
 }
+# ── 工具调用吐到一半就断 -> 缓冲必须挡住半成品 ──────────────────────────────
+#
+# 插件把 tool-call 的 block-start/delta 压到 block-end 才交付，所以「参数还没吐完
+# 就断线」这种故障对宿主是不可见的：宿主该看到一次干净的失败并重试/回退，而不是
+# 拿到一个 arguments 被截断的调用去执行。
+run_drop_mid_tool() {
+	local name="工具调用吐一半断流 -> 宿主看不到半成品调用"
+	rm -f "$STATE" "$WORK"/fake-*.log
+	local problems=()
+
+	_start_servers "drop-mid-tool" "ok"; local out; out="$(_answer)"; _stop_servers
+
+	# 半截 arguments 绝不能出现在输出里（出现说明缓冲漏了）
+	if grep -q 'HALF' <<<"$out"; then
+		problems+=("宿主看到了被截断的工具参数: $(head -c 140 <<<"$out")")
+	fi
+	grep -q "pong-from-$PORT_B" <<<"$out" || problems+=("未回退到 fake-b: $(head -c 140 <<<"$out")")
+	# 不能以工具执行错误收场
+	if grep -qiE 'tool.*(invalid|failed|malformed)|INVALID_ARGUMENT' <<<"$out"; then
+		problems+=("出现了工具调用错误: $(head -c 140 <<<"$out")")
+	fi
+
+	if [ "${#problems[@]}" -eq 0 ]; then ok "$name"; else
+		bad "$name"; local p; for p in "${problems[@]}"; do printf '      %s\n' "$p"; done
+	fi
+}
 
 # ── 跨轮次场景：熔断锁 -> 跳过 -> 到期探活恢复 ───────────────────────────────
 run_breaker_lifecycle() {
@@ -302,7 +328,7 @@ PY
 	fi
 }
 
-SCENARIOS=(baseline upstream400 genuine400 transient500 exhausted malformed probe-refail drop breaker)
+SCENARIOS=(baseline upstream400 genuine400 transient500 exhausted malformed probe-refail drop drop-mid-tool breaker)
 
 main() {
 	section "准备：独立 DSH_HOME + 临时 profile + 装插件"
@@ -337,6 +363,9 @@ main() {
 	fi
 	if [ -z "$only" ] || [ "$only" = drop ]; then
 		run_drop_after_delivery
+	fi
+	if [ -z "$only" ] || [ "$only" = drop-mid-tool ]; then
+		run_drop_mid_tool
 	fi
 	if [ -z "$only" ] || [ "$only" = breaker ]; then
 		run_breaker_lifecycle

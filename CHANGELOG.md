@@ -4,6 +4,17 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.5.10] - 2026-11-25
+
+### Added
+
+- `e2e/run.sh drop-mid-tool` — a tool call is cut off mid-`arguments`. Tool-call chunks
+  are held until `block-end`, so the host must never see the half-built call; the run
+  should fall back transparently. This closes the last "tool-call retry specifics" gap
+  listed in `DESIGN.md` §11.
+
+Ten scenarios now; `0.5.5` fails 2 of them, `0.5.10` passes all 10.
+
 ## [0.5.9] - 2026-11-25
 
 ### Added

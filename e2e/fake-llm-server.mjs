@@ -166,6 +166,35 @@ const server = createServer(async (req, res) => {
 			]);
 			return;
 
+		case 'drop-mid-tool':
+			// 工具调用吐到一半就断：block-start + 部分 arguments，没有 block-end。
+			// 插件把 tool-call 压到 block-end 才交付，所以宿主**不该**看见这个半成品
+			// —— 它应该透明地重试/回退。若缓冲坏了，宿主会拿到一个参数非法的调用。
+			res.writeHead(200, { 'content-type': 'text/event-stream' });
+			res.write(
+				`data: ${JSON.stringify({
+					id: `cmpl-${served}`,
+					object: 'chat.completion.chunk',
+					created: Math.floor(Date.now() / 1000),
+					model: 'fake-model',
+					choices: [
+						{
+							index: 0,
+							delta: {
+								role: 'assistant',
+								tool_calls: [
+									{ index: 0, id: 'call_x', type: 'function', function: { name: 'read', arguments: '{"file":"HALF' } },
+								],
+							},
+							finish_reason: null,
+						},
+					],
+				})}\n\n`,
+			);
+			await new Promise((resolve) => setTimeout(resolve, 150));
+			res.destroy();
+			return;
+
 		case 'drop':
 			res.writeHead(200, { 'content-type': 'text/event-stream' });
 			res.write(
