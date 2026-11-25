@@ -37,3 +37,21 @@ jobs:
           node-version: 22
       - run: npm install --no-audit --no-fund
       - run: npm test
+
+  # 端到端：真的起一个 dsh、加载这个包、让它去请求行为已知的假 provider。
+  # 单元测试里的 adapter 是假的，证明不了「用户装到的包 + 真宿主 + 真 HTTP 故障」
+  # 这条路 —— 2026-11-24 那两个 bug 都是只有真流量才会暴露的。
+  # 需要的只是 npm 上的 dsh；不需要任何 API key（假 provider 指向 127.0.0.1）。
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --no-audit --no-fund
+      # 装一个确定版本的 dsh 供 e2e 使用，避免 runner 上恰好没有。
+      - run: npm install --global @deepseek-ai/dsh@0.2.2-rc.5
+      - name: Run e2e scenarios
+        run: e2e/run.sh

@@ -255,17 +255,34 @@ Unit tests (`node --test`, 90 cases) cover:
   schedule parity with the host, validation and catalogue checks;
 - replay envelope wrap/unwrap, including the legacy `dsh-llm-fallback` kind.
 
-End-to-end smoke (isolated `DSH_HOME`, temporary web profile, fake OpenAI-compatible server):
+End-to-end runs live in `e2e/` and are executed by `e2e/run.sh` — a real `dsh` is
+started against two fake OpenAI-compatible servers, in an isolated `DSH_HOME`, with the
+published package installed rather than the working tree. Each assertion checks *who was
+called and how*, not merely that no error surfaced (a green run with no traffic proves
+nothing — 2026-11-25).
 
-- entitlement 500 on target 1 → fallback to target 2, output normal;
-- two transient 500s on target 3 → retry with 100/200 ms backoff, third attempt succeeds;
-- all targets fail → `FALLBACK_EXHAUSTED` with the last real failure preserved;
+Implemented today (`e2e/run.sh --list`):
+
+- `baseline` — both targets healthy: target 1 answers, target 2 is never contacted;
+- `upstream400` — target 1 answers `400 {"code":"upstream_error"}` (the real gateway
+  shape) → falls back instead of failing the turn;
+- `genuine400` — a real request error → fails fast, target 2 is not contacted;
+- `transient500` — retries exhaust, then falls back;
+- `breaker` — four rounds: threshold trips and writes `stateFile` → a second process
+  skips the locked target → lock expires and a *background probe* fires (no tools, single
+  message, budget not 1) while the turn still uses target 2 → the next turn uses target 1
+  again and `entries` is empty.
+
+Still to add (each is a known gap, not a claim):
+
+- all targets failing → `FALLBACK_EXHAUSTED` carrying the last real failure;
 - malformed tool call → buffer dropped and retried, host sees only the successful attempt;
-- breaker threshold writes `stateFile`; a new process skips the locked target;
-- lock expiry + failed probe → lock again;
-- text delivered then transport failure → host replays the step, skips the failed target,
-  then succeeds;
-- settings card renders in a temporary web profile; add/edit/save/reload round-trips.
+- lock expiry + *failed* probe → lock again;
+- text delivered then transport failure → host replays the step and skips that target;
+- settings card round-trip in a temporary web profile.
+
+The first two of those need a fake server that emits a malformed `tool_calls` stream; the
+last needs a browser, so it belongs to a separate harness.
 
 ## 12. Known limitations and open questions
 
