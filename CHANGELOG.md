@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.5.7] - 2026-11-25
+
+### Documentation
+
+- README (both languages) now carries a **tested platforms** table — only
+  environments where the suite was actually run are listed — and a **reporting a
+  problem** section pointing at the new issue templates.
+- `.github/ISSUE_TEMPLATE/` added: `bug_report.yml` (asks for the version, platform,
+  verbatim `code`/`message` and the breaker state file) and `config_question.yml`.
+
 ## [0.5.6] - 2026-11-24
 
 ### Fixed
@@ -47,7 +57,6 @@ All notable changes to this project are documented here. The format follows
   `.github/workflows/publish.yml` publishes on a `vX.Y.Z` tag and refuses to run
   when the tag, `package.json` and the CHANGELOG top section disagree.
   CONTRIBUTING documents the one-time trusted-publisher setup.
-
 ## [0.5.5] - 2026-11-22
 
 ### Fixed
