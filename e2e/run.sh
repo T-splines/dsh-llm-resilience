@@ -75,6 +75,11 @@ prepare() {
             name: fake-model
             contextWindow: 128000
             input: [text]
+            # 只声明 low/high：会话选 max 时，链必须在派发前就近映射成 high。
+            # 不声明 off 是刻意的——「目标不支持所请求档位」才是真实场景。
+            reasoningEfforts:
+              low: low
+              high: high
       fake-b:
         displayName: Fake B
         apiKeyEnv: FAKE_KEY
@@ -125,6 +130,9 @@ prepare() {
   config:
     provider: fallback
     model: auto
+    # 用户线上场景：会话选了 max。合成模型必须接住宿主的预校验，
+    # 再由每条 target 决定映射还是省略。
+    reasoningEffort: max
 YAML
 }
 
@@ -278,6 +286,54 @@ run_drop_mid_tool() {
 	fi
 }
 
+# ── 思考强度 max -> 目标只有 low/high 时就近映射 ─────────────────────────────
+#
+# 这个场景抓的是 2026-11-25 的线上 bug：宿主在进入适配器之前，会用合成模型的
+# reasoning 元数据校验 reasoningEffort。合成模型若只声明 target 能力的交集，
+# 一个手动添加、没写 thinking 配置的模型就会让整条链拒绝 max。
+run_effort_mapping() {
+	local name="思考强度 max -> 目标只支持 low/high 时就近映射为 high"
+	rm -f "$STATE" "$WORK"/fake-*.log
+	local problems=()
+
+	_start_servers "ok" "ok"; local out; out="$(_answer)"; _stop_servers
+	grep -q "pong-from-$PORT_A" <<<"$out" || problems+=("fake-a 未作答: $(head -c 140 <<<"$out")")
+	if grep -qiE 'UNSUPPORTED_REASONING_EFFORT|does not support reasoning' <<<"$out"; then
+		problems+=("宿主在进入链之前拒绝了 max: $(head -c 180 <<<"$out")")
+	fi
+	local line; line="$(grep 'action=ok' "$WORK/fake-a.log" | head -1)"
+	[ -n "$line" ] || problems+=("fake-a 没收到真实请求")
+	grep -q 'effort=high' <<<"$line" || problems+=("max 未映射成 high: $line")
+	grep -q 'effort=max' <<<"$line" && problems+=("把不支持的 max 原样发给了目标: $line")
+
+	if [ "${#problems[@]}" -eq 0 ]; then ok "$name"; else
+		bad "$name"; local p; for p in "${problems[@]}"; do printf '      %s\n' "$p"; done
+	fi
+}
+
+# ── 思考强度 max -> 目标没有 thinking 元数据时省略参数 ───────────────────────
+#
+# 用户手动添加的 glm-5.4 就是这种目标：直接调用走默认，能用；链不能因为
+# 会话选了 max 就把它变成不可用。适配器应省略 reasoningEffort，让目标用默认。
+run_effort_omit() {
+	local name="思考强度 max -> 无 thinking 元数据的目标省略参数，不硬失败"
+	rm -f "$STATE" "$WORK"/fake-*.log
+	local problems=()
+
+	_start_servers "400upstream" "ok"; local out; out="$(_answer)"; _stop_servers
+	grep -q "pong-from-$PORT_B" <<<"$out" || problems+=("未回退到 fake-b: $(head -c 140 <<<"$out")")
+	if grep -qiE 'UNSUPPORTED_REASONING_EFFORT|does not support reasoning' <<<"$out"; then
+		problems+=("无 thinking 的目标被 max 直接判死: $(head -c 180 <<<"$out")")
+	fi
+	local line; line="$(grep 'action=ok' "$WORK/fake-b.log" | head -1)"
+	[ -n "$line" ] || problems+=("fake-b 没收到真实请求")
+	grep -q 'effort=-' <<<"$line" || problems+=("无 thinking 的目标仍收到了 effort 参数: $line")
+
+	if [ "${#problems[@]}" -eq 0 ]; then ok "$name"; else
+		bad "$name"; local p; for p in "${problems[@]}"; do printf '      %s\n' "$p"; done
+	fi
+}
+
 # ── 跨轮次场景：熔断锁 -> 跳过 -> 到期探活恢复 ───────────────────────────────
 run_breaker_lifecycle() {
 	local name="熔断生命周期：锁 -> 跳过 -> 到期探活 -> 恢复"
@@ -328,7 +384,7 @@ PY
 	fi
 }
 
-SCENARIOS=(baseline upstream400 genuine400 transient500 exhausted malformed probe-refail drop drop-mid-tool breaker)
+SCENARIOS=(baseline upstream400 genuine400 transient500 exhausted malformed effort-map effort-omit probe-refail drop drop-mid-tool breaker)
 
 main() {
 	section "准备：独立 DSH_HOME + 临时 profile + 装插件"
@@ -357,6 +413,12 @@ main() {
 	fi
 	if [ -z "$only" ] || [ "$only" = malformed ]; then
 		run_case "并行工具调用被拼成一个块（MALFORMED_RESPONSE）-> 不整轮作废" malformed-tools ok 8798 -
+	fi
+	if [ -z "$only" ] || [ "$only" = effort-map ]; then
+		run_effort_mapping
+	fi
+	if [ -z "$only" ] || [ "$only" = effort-omit ]; then
+		run_effort_omit
 	fi
 	if [ -z "$only" ] || [ "$only" = probe-refail ]; then
 		run_probe_refail

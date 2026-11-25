@@ -81,7 +81,8 @@ for attempt of attempts (chain order):
       # A successful probe does not close the breaker immediately:
       # the real request must succeed before recordSuccess().
   for retry = 0..target.maxRetries:
-      stream = ctx.llm.stream({ ...options, provider, model })
+      effort = map_effort(session.reasoningEffort, target.reasoningEffort, target.info)
+      stream = ctx.llm.stream({ ...options, provider, model, [effort] })
       try:
           yield chunks (text/reasoning immediately; tool-call buffered until block-end)
           if finish is success: breaker.recordSuccess(key); return
@@ -97,6 +98,31 @@ for attempt of attempts (chain order):
       breaker.recordFailure(key); break  // next target
 throw the last failure
 ```
+
+### Reasoning effort
+
+The host validates `reasoningEffort` against the synthetic model's metadata **before** the
+adapter sees the request. Advertising the intersection of target capabilities therefore
+turns one target without thinking metadata into a hard `UNSUPPORTED_REASONING_EFFORT` for
+the whole chain (reported on 0.5.8, still present in 0.5.10). The synthetic model always advertises the seven standard
+levels plus any provider-specific levels found on targets; `defaultEffort` is deliberately
+omitted so an unspecified selection keeps each target's own default.
+
+At dispatch, each target gets one of:
+
+1. the exact requested level, when it declares that id;
+2. the nearest declared level on a 0–100 scale (off 0, minimal 10, low 25, medium 50,
+   high 75, xhigh 90, max 100), ties going to the higher level;
+3. the target's highest rankable level, then `defaultEffort` and its first level, when the
+   requested name is unknown;
+4. no `reasoningEffort` at all, when the target declares no reasoning capability; this also
+   emits a one-time warning pointing at the missing `reasoningEfforts` declaration.
+
+A target-level `reasoningEffort` overrides the session value; `auto` (default) follows it.
+If an upstream still rejects the effort (stale capability metadata), the adapter parses the
+levels named in the error, retries the nearest one, then retries once without the parameter.
+Only then does the failure count against the target. Mappings and omissions are written as
+`plugin:llm-fallback` records with `kind: "effort"`.
 
 ### Streaming invariants
 
@@ -235,7 +261,7 @@ half-open --(probe is inconclusive)--> closed; real traffic decides
 
 ## 11. Tests and verification
 
-Unit tests (`node --test`, 90 cases) cover:
+Unit tests (`node --test`, 117 cases) cover:
 
 - nominal backoff (2x / 1.5x / cap), jitter bounds, per-target reset;
 - classification: entitlement 500 → fallback, transient → retry, invalid → fail, overrides;
@@ -251,8 +277,10 @@ Unit tests (`node --test`, 90 cases) cover:
 - breaker persistence across processes, including sub-threshold counts, tombstones and
   concurrent writes;
 - global deadline/attempt caps, background probing, runtime snapshots and session records;
+- reasoning effort: rank/alias mapping, nearest/tie-up/unknown fallbacks, omission when the
+  target has no metadata, target overrides, and runtime retry after a rejection;
 - settings-client pure functions: field round-trips, unit switching (minutes ↔ ms), retry
-  schedule parity with the host, validation and catalogue checks;
+  schedule parity with the host, effort-option synthesis, validation and catalogue checks;
 - replay envelope wrap/unwrap, including the legacy `dsh-llm-fallback` kind.
 
 End-to-end runs live in `e2e/` and are executed by `e2e/run.sh` — a real `dsh` is
@@ -268,6 +296,10 @@ Implemented today (`e2e/run.sh --list`):
   shape) → falls back instead of failing the turn;
 - `genuine400` — a real request error → fails fast, target 2 is not contacted;
 - `transient500` — retries exhaust, then falls back;
+- `effort-map` — the session selects `max`, target 1 declares only `low`/`high`: the host
+  must let the request into the chain and the target must receive `high`;
+- `effort-omit` — target 1 fails over to target 2, which has no thinking metadata: `max`
+  must not reject the chain, and target 2 must receive no effort parameter;
 - `breaker` — four rounds: threshold trips and writes `stateFile` → a second process
   skips the locked target → lock expires and a *background probe* fires (no tools, single
   message, budget not 1) while the turn still uses target 2 → the next turn uses target 1
@@ -283,9 +315,11 @@ Still to add (each is a known gap, not a claim):
 - settings card round-trip in a temporary web profile — needs a browser, so it belongs to
   a separate harness.
 
-A `0.5.5` run of this suite fails 2 of the 10 scenarios; `0.5.10` passes all 10. That
-comparison is the acceptance rule for every new scenario: **if it cannot go red on the
-old version, it is not testing anything.**
+`0.5.5` fails 2 of its then-10 scenarios, and `0.5.10` passes all 10 but fails both new
+effort scenarios with the exact user-reported error
+(`provider "fallback" model "auto" does not support reasoning effort "max"`). `0.6.0`
+passes all 12. That comparison is the acceptance rule for every new scenario: **if it
+cannot go red on the old version, it is not testing anything.**
 
 ## 12. Known limitations and open questions
 
@@ -297,8 +331,10 @@ old version, it is not testing anything.**
    plus target continuation rather than buffering the whole stream. Buffering would remove
    in-request fallback after the first token but delay the first token; it is not the default.
 3. **Model catalogue.** The synthetic route exposes one model, `auto`. `resolveModel` takes
-   the minimum context window, modality intersection and reasoning effort intersection of
-   the chain. The settings page shows the real model for each target.
+   the minimum context window and modality intersection, but the **union** of reasoning
+   levels: the host validates effort before dispatch, so the union is what keeps a
+   non-thinking target from rejecting the chain. Per-target mapping happens in the
+   adapter. The settings page shows the real model for each target.
 4. **All targets locked.** `ALL_TARGETS_LOCKED` is thrown; the plugin does not force one
    last request into a locked provider. Whether to allow a "last resort even if locked"
    target is an open question.

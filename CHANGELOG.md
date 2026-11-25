@@ -4,6 +4,53 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.6.0] - 2026-11-25
+
+### Fixed
+
+- **A chain that contains a model without thinking metadata no longer rejects every
+  explicit reasoning effort.** The host validates `reasoningEffort` against the synthetic
+  `fallback/auto` model before the request reaches this plugin. The synthetic model used to
+  declare only the intersection of target capabilities, so a manually added model with no
+  thinking config made `max` fail the whole turn with
+  `provider "fallback" model "auto" does not support reasoning effort "max"`. **This was
+  reported on 0.5.8 and reproduced unchanged on 0.5.10**; the GLM model in the report
+  actually accepts `max`, but DSH had not discovered its `reasoningEfforts`. The synthetic
+  model now always advertises the standard levels plus provider-specific levels found on
+  targets, and each target decides what to send. A target whose metadata is missing gets
+  its default behavior and a one-time warning naming the missing declaration — the chain
+  no longer silently loses every level, and the misconfiguration is diagnosable.
+- The adapter maps the requested level to the nearest level a target actually declares
+  (`off=0`, `minimal=10`, `low=25`, `medium=50`, `high=75`, `xhigh=90`, `max=100`; ties go
+  to the higher level). An unknown name falls back to the highest declared level, then the
+  target default. A target with no reasoning metadata receives **no** effort parameter and
+  uses its own default. A target whose metadata is stale can still reject the level at
+  runtime; the adapter then reads the supported levels from the error, retries the nearest,
+  and finally retries once without the parameter.
+
+### Added
+
+- Per-target `reasoningEffort` (default `auto`). `auto` follows the session selection;
+  a concrete value pins that target and is still mapped to what the target supports.
+- The settings card shows an effort dropdown per target, built from the model catalog's
+  declared levels plus the standard levels. `auto` is the default.
+- `lib/effort.js` with shared ranking/aliasing/mapping helpers and `test/effort.test.js`.
+- Session records (`plugin:llm-fallback`, `kind: "effort"`) when a level is mapped,
+  omitted, or rejected-and-retried, so a mismatch is diagnosable. A target that declares
+  no reasoning support also logs a one-time warning naming the likely fix
+  (`reasoningEfforts` / `modelOverrides.reasoningEfforts` in the provider profile) instead
+  of silently dropping the requested level.
+- Two end-to-end scenarios: `effort-map` (session `max`, target declares only low/high,
+  target receives `high`) and `effort-omit` (fallback to a target with no thinking metadata,
+  which receives no effort parameter). `0.5.10` fails both with the exact reported error;
+  `0.6.0` passes all 12 scenarios on DSH 0.2.2-rc.5 and runs the effort scenarios on
+  DSH 0.2.1-rc.5.
+
+### Documentation
+
+- README (both languages) and `DESIGN.md` document the validation-before-dispatch problem,
+  the 0–100 scale, the fallback order, and the settings UI.
+
 ## [0.5.10] - 2026-11-25
 
 ### Added

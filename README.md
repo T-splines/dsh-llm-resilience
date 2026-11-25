@@ -20,6 +20,7 @@
 - [注册了什么](#注册了什么)
 - [安装](#安装)
 - [配置](#配置)
+- [思考强度](#思考强度reasoning-effort)
 - [错误分类](#错误分类)
 - [流式输出、工具调用与整步重放](#流式输出工具调用与整步重放)
 - [熔断](#熔断)
@@ -73,8 +74,10 @@ fallback/auto
   `CONTEXT_WINDOW_EXCEEDED` 原样抛出，让宿主的图片卸载 / 上下文压缩先恢复。
 - **设置页。** 编辑链、上下移动 target、查看每次重试计划、实时看熔断状态
   （`closed / open / half-open / probing`）。
-- **有测试。** 90 个 `node --test` 用例，另有隔离 DSH + 本地假 OpenAI server 的端到端冒烟
-  （见 [DESIGN.md](DESIGN.md)）。
+- **思考强度不会把模型变成不可用。** 合成模型声明完整档位并集；会话选的 `max` 会按
+  target 实际能力就近映射，没有 thinking 元数据的目标则省略参数、使用它自己的默认值。
+- **有测试。** 117 个 `node --test` 用例，另有隔离 DSH + 本地假 OpenAI server 的 12 个
+  端到端场景（见 [DESIGN.md](DESIGN.md)）。
 
 ## 注册了什么
 
@@ -179,11 +182,46 @@ dsh --profile web --dump-config | grep -A8 'id: llm-fallback'
 |:--|:--|
 | `enabled` | 总开关；禁用时 route 仍存在但拒绝请求 |
 | `route` | 合成 provider 名（默认 `fallback`）；不能出现在 `targets` 里 |
-| `targets[]` | 有序的 `{ provider, model, enabled, label, maxRetries, initialDelayMs, multiplier, maxDelayMs, jitterRatio }` |
+| `targets[]` | 有序的 `{ provider, model, enabled, label, reasoningEffort, maxRetries, initialDelayMs, multiplier, maxDelayMs, jitterRatio }` |
 | `breaker` | `failureThreshold`、`lockMs`、探活参数（`enabled` / `background` / `timeoutMs` / `maxTokens` / `prompt`）、`stateFile` |
 | `limits` | `maxTotalMs`、`maxAttempts`；`0` 表示不限制该维度 |
 | `toolCalls.retryMalformed` | 重试模型输出损坏的工具调用（默认 `true`）；工具**执行**失败不支持重试 |
 | `codeActions` | 按稳定错误码覆盖默认动作（`retry` / `fallback` / `fail`） |
+
+target 的 `reasoningEffort` 默认 `auto`：跟随会话/宿主要求的档位。设为 `off` / `minimal` /
+`low` / `medium` / `high` / `xhigh` / `max`（或 provider 自定义档位名）时，该 target 固定
+用这个值；目标不支持时仍会按下面的规则就近映射。
+
+## 思考强度（reasoning effort）
+
+宿主会在请求进入适配器**之前**，用合成模型 `fallback/auto` 的元数据校验
+`reasoningEffort`。如果合成模型只声明各 target 能力的交集，链里只要有一个手动添加、
+没写 thinking 配置的模型，`max` 就会在进入链之前被拒绝——这正是 0.5.10 及更早版本的
+问题。现在合成模型始终声明完整标准档位并集，真正的取舍在每条 target 派发前完成：
+
+| 标准档位 | 数值 |
+|:--|--:|
+| `off` | 0 |
+| `minimal` | 10 |
+| `low` | 25 |
+| `medium` | 50 |
+| `high` | 75 |
+| `xhigh` | 90 |
+| `max` | 100 |
+
+- 常见别名（`none`、`extra-high`、`maximum` 等）落在同一把尺子上；数值字符串 `0`–`100`
+  也接受。
+- **就近映射**：选目标声明过的档位里距离最近的一个；距离相等时取更高档（选 `max` 时
+  不会悄悄降成 `low`）。
+- **认不出名字**：先退到目标的最高档；目标连可排序的档位都没有时，再用
+  `defaultEffort`，最后用它的第一个档位。
+- **目标没有 thinking 元数据**：省略 `reasoningEffort`，使用目标默认值。原本直接调用
+  可用的模型，在链里仍然可用；同时写一条一次性告警，提示如果该模型其实支持思考，
+  应在 provider 配置里补 `reasoningEfforts`（或 `modelOverrides.reasoningEfforts`）。
+- **运行时兜底**：上游仍拒绝该档位时，插件会从报错原文里识别它支持的档位并重试最近
+  档位；再不行就省略参数重试一次。只有全部失败后才记为 target 故障并 fallback。
+- 映射与省略会写进会话的 `plugin:llm-fallback` 记录（`kind: "effort"`），方便排查
+  「为什么这个 target 收到的强度和我选的不一样」。
 
 ## 错误分类
 
@@ -253,8 +291,9 @@ half-open --(探活无定论)--> 解锁，交回真实流量判断
 
 Plugins → Installed → `@magic6/dsh-llm-resilience` → **Model fallback chain**：
 
-- 每个 target 一行：启用、provider、model（从会话模型目录读出的只读下拉）、显示名、
-  重试参数、上下移动、删除、新增；
+- 每个 target 一行：启用、provider、model（从会话模型目录读出的只读下拉）、思考强度、
+  显示名、重试参数、上下移动、删除、新增；思考强度下拉会先列该模型声明的档位，再补
+  标准档位，`auto` 表示跟随会话；
 - 「重试计划」悬停：每次重试一行，`jitter > 0` 时显示区间；
 - 熔断与全局预算字段；
 - 「运行状态」每 4 秒从宿主读取：`closed / open / half-open / probing`、剩余锁定时间、

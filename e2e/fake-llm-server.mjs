@@ -79,9 +79,10 @@ const server = createServer(async (req, res) => {
 			/* 记形状用，解析失败不影响行为 */
 		}
 		const maxTokens = parsed.max_tokens ?? parsed.max_completion_tokens;
+		const effort = parsed.reasoning_effort ?? parsed.reasoning?.effort ?? '-';
 		console.log(
 			`#${served} action=${action} model=${parsed.model} stream=${parsed.stream}` +
-				` max_tokens=${maxTokens} msgs=${(parsed.messages ?? []).length} tools=${(parsed.tools ?? []).length}`,
+				` effort=${effort} max_tokens=${maxTokens} msgs=${(parsed.messages ?? []).length} tools=${(parsed.tools ?? []).length}`,
 		);
 	}
 

@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
+import { CANONICAL_EFFORTS } from '../lib/effort.js';
 import { nominalSchedule } from '../lib/policy.js';
 
 let loaded;
@@ -123,6 +124,7 @@ test('配置 → 草稿 → ops 往返不丢字段', () => {
 				provider: 'p',
 				model: 'm',
 				label: '备用',
+				reasoningEffort: 'max',
 				maxRetries: 7,
 				initialDelayMs: 1500,
 				multiplier: 1.5,
@@ -142,6 +144,7 @@ test('配置 → 草稿 → ops 往返不丢字段', () => {
 	const draft = helpers.configDraft(value);
 	assert.equal(draft.lockMinutes, '60');
 	assert.equal(draft.targets[0].maxRetries, '7');
+	assert.equal(draft.targets[0].reasoningEffort, 'max');
 	assert.equal(draft.targets[0].enabled, false);
 	assert.equal(draft.probeBackground, true);
 	assert.equal(draft.maxTotalMs, '120000');
@@ -172,6 +175,40 @@ test('空配置解析为 schema 默认值，不伪造额外 target', () => {
 	assert.equal(draft.maxAttempts, '50');
 	assert.equal(draft.stateFile, '$DSH_HOME/storages/llm-resilience/state.json');
 	assert.equal(draft.retryMalformed, true);
+});
+
+test('思考强度：新 target 默认 auto，空值写回也归一成 auto', () => {
+	const target = helpers.defaultTarget();
+	assert.equal(target.reasoningEffort, 'auto');
+	assert.equal(helpers.storedTarget(target).reasoningEffort, 'auto');
+	assert.equal(helpers.storedTarget({ ...target, reasoningEffort: '' }).reasoningEffort, 'auto');
+	assert.equal(helpers.storedTarget({ ...target, reasoningEffort: 'high' }).reasoningEffort, 'high');
+});
+
+test('思考强度选项：目标声明优先，再补标准档位，未知现值保留', () => {
+	const choices = helpers.reasoningChoices(
+		{
+			reasoning: {
+				efforts: [
+					{ id: 'low', name: 'Low' },
+					{ id: 'turbo', name: 'Turbo' },
+				],
+			},
+		},
+		'custom-level',
+	);
+	const ids = choices.map((choice) => choice.id);
+	assert.deepEqual(ids, ['low', 'turbo', 'off', 'minimal', 'medium', 'high', 'xhigh', 'max', 'custom-level']);
+	assert.equal(ids.includes('auto'), false);
+
+	const canonicalOnly = helpers.reasoningChoices(undefined, undefined);
+	assert.deepEqual(
+		canonicalOnly.map((choice) => choice.id),
+		CANONICAL_EFFORTS.map((effort) => effort.id),
+	);
+
+	const auto = helpers.reasoningChoices(undefined, 'auto');
+	assert.equal(auto.some((choice) => choice.id === 'auto'), false);
 });
 
 test('校验：启用条目的 provider/model/数值与熔断字段', () => {

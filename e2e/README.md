@@ -25,7 +25,7 @@ e2e/run.sh --list       # 列出场景
 
 | 变量 | 作用 |
 |:--|:--|
-| `PLUGIN_SPEC` | 装哪个，默认**本仓库路径**（link: 安装，测的是工作树源码）。设成 `@magic6/dsh-llm-resilience@0.5.5` 可做回归对照，设成 `@…@<版本>` 可验证 registry 上的包 |
+| `PLUGIN_SPEC` | 装哪个，默认**本仓库路径**（link: 安装，测的是工作树源码）。设成 `@magic6/dsh-llm-resilience@0.5.10` 可做回归对照，设成 `@…@<版本>` 可验证 registry 上的包 |
 | `E2E_WORK` | 工作目录（含独立 `DSH_HOME`），默认 `/tmp/dsh-llm-resilience-e2e` |
 | `PORT_A` / `PORT_B` | 两个假 server 的端口，默认 8799 / 8798 |
 | `DSH_BIN` | dsh 可执行文件，默认从 PATH 找 |
@@ -46,6 +46,8 @@ e2e/run.sh --list       # 列出场景
 | `transient500` | a 一直 500 | 重试耗尽后 fallback |
 | `exhausted` | 两个都 500 | 报 `FALLBACK_EXHAUSTED`，保留最后一次真实失败 |
 | `malformed` | a 把两个工具调用塞进同一个 index | 不整轮作废，重试后 fallback |
+| `effort-map` | 会话选 `max`；a 只声明 `low`/`high` | 请求必须进入链，a 收到就近映射后的 `high`（**0.5.10 上这条报 `UNSUPPORTED_REASONING_EFFORT`**） |
+| `effort-omit` | 会话选 `max`；a 失败后回退到没有 thinking 元数据的 b | b 必须收到**没有** effort 参数的请求并正常作答（**0.5.10 上这条也报错**） |
 | `probe-refail` | 三轮：打满 -> 探活也失败 -> 再查 | 探活失败要**重新锁**，不能放行 |
 | `drop` | a 吐一段内容后就断流（不发 `[DONE]`） | 交宿主整步重放；用户只看到**一份**完整内容，fake-a 那半截不许出现 |
 | `drop-mid-tool` | a 的工具调用吐出半截 arguments 就断 | 宿主看不到半成品调用（缓冲压到 block-end 才交付），透明回退 |
@@ -69,15 +71,16 @@ e2e/run.sh --list       # 列出场景
 **能。** 拿旧版本跑同一套，它必须挂：
 
 ```bash
-PLUGIN_SPEC='@magic6/dsh-llm-resilience@0.5.5' E2E_WORK=/tmp/e2e-old e2e/run.sh
+PLUGIN_SPEC='@magic6/dsh-llm-resilience@0.5.10' E2E_WORK=/tmp/e2e-old e2e/run.sh
 ```
 
 实测结果：
 
 | 版本 | 结果 |
 |:--|:--|
-| `0.5.5`（有 bug） | 8 通过 **2 失败** —— `upstream400` 整轮失败、`breaker` 探活预算仍是 1 |
-| `0.5.10`（已修） | **10 通过 0 失败** |
+| `0.5.5`（有 bug） | 在其当时的 10 个场景里 8 通过 **2 失败** —— `upstream400` 整轮失败、`breaker` 探活预算仍是 1 |
+| `0.5.10`（已修 0.5.6 的两条） | 10 个旧场景全过；加上 `effort-map` / `effort-omit` 后 **12 个里 2 个失败**，复现用户原文 `provider "fallback" model "auto" does not support reasoning effort "max"` |
+| `0.6.0` | **12 通过 0 失败**（DSH 0.2.2-rc.5）；两个 effort 场景也在 DSH 0.2.1-rc.5 通过 |
 
 一条永远绿的测试什么也证明不了。**加场景时必须回答：它在旧版本上会不会红？**
 如果不会，那个场景没有在测任何东西。

@@ -717,7 +717,10 @@ test('resolveModel：取能力交集/最小上下文，身份仍是合成 route'
 				defaultMaxTokens: 800,
 				inputModalities: ['text'],
 				reasoning: {
-					efforts: [{ id: 'high', name: 'High' }],
+					efforts: [
+						{ id: 'high', name: 'High' },
+						{ id: 'turbo', name: 'Turbo' },
+					],
 					defaultEffort: 'high',
 				},
 				systemPromptUpdate: 'in-history',
@@ -734,10 +737,207 @@ test('resolveModel：取能力交集/最小上下文，身份仍是合成 route'
 	assert.equal(info.context.contextWindow, 1000);
 	assert.equal(info.defaultMaxTokens, 500);
 	assert.deepEqual(info.inputModalities, ['text']);
-	assert.deepEqual(info.reasoning.efforts.map((effort) => effort.id), ['high']);
-	assert.equal(info.reasoning.defaultEffort, 'high');
+	// 合成模型声明宽档位并集，宿主才不会在进入适配器前拒绝 max；
+	// 具体映射在每条 target 派发时完成。
+	assert.deepEqual(
+		info.reasoning.efforts.map((effort) => effort.id),
+		['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'turbo'],
+	);
+	// 不设默认值：会话没选档位时，保留每条 target 自己的默认 thinking 配置。
+	assert.equal(info.reasoning.defaultEffort, undefined);
 	assert.equal(info.systemPromptUpdate, 'in-history');
 	assert.equal(info.toolUpdate, undefined);
+});
+
+test('思考强度：目标没有 reasoning 元数据时省略参数，原模型仍可用且留下诊断', async () => {
+	const llm = createLlm({ 'p1/m1': [okAttempt('ok')] });
+	const events = [];
+	const recordSession = (sessionId, event) => events.push({ sessionId, ...event });
+	const { adapter, warnings } = makeAdapter(makeConfig([target('p1', 'm1')]), llm, {
+		recordSession,
+	});
+
+	const chunks = await collect(
+		adapter.stream({ ...streamOptions, sessionId: 's1', reasoningEffort: 'max' }),
+	);
+
+	assert.equal(llm.calls.length, 1);
+	assert.equal('reasoningEffort' in llm.calls[0], false);
+	assert.equal(chunks.at(-1).reason.kind, 'stop');
+	assert.ok(warnings.some((line) => /declares no reasoning support/.test(line)));
+	assert.ok(
+		events.some(
+			(event) =>
+				event.sessionId === 's1' &&
+				event.kind === 'effort' &&
+				event.reason === 'unsupported' &&
+				event.requested === 'max' &&
+				event.effective === null,
+		),
+	);
+});
+
+test('思考强度：混合链里一个 target 无 reasoning，不会拖垮整条链的档位', async () => {
+	const llm = createLlm(
+		{},
+		{
+			'p1/m1': {
+				provider: 'p1',
+				id: 'm1',
+				name: 'M1',
+				reasoning: { efforts: [{ id: 'low' }, { id: 'high' }] },
+			},
+			'p2/m2': { provider: 'p2', id: 'm2', name: 'M2' },
+		},
+	);
+	const { adapter } = makeAdapter(makeConfig([target('p1', 'm1'), target('p2', 'm2')]), llm);
+
+	const info = await adapter.resolveModel('fallback', 'auto');
+
+	assert.ok(info.reasoning.efforts.some((effort) => effort.id === 'max'));
+});
+
+test('思考强度：按 0–100 就近映射到目标支持的档位', async () => {
+	const llm = createLlm(
+		{ 'p1/m1': [okAttempt('ok'), okAttempt('ok')] },
+		{
+			'p1/m1': {
+				provider: 'p1',
+				id: 'm1',
+				name: 'M1',
+				reasoning: {
+					efforts: [
+						{ id: 'low', name: 'Low' },
+						{ id: 'high', name: 'High' },
+					],
+					defaultEffort: 'low',
+				},
+			},
+		},
+	);
+	const { adapter } = makeAdapter(makeConfig([target('p1', 'm1')]), llm);
+
+	await collect(adapter.stream({ ...streamOptions, reasoningEffort: 'max' }));
+	assert.equal(llm.calls[0].reasoningEffort, 'high');
+
+	await collect(adapter.stream({ ...streamOptions, reasoningEffort: 'off' }));
+	assert.equal(llm.calls[1].reasoningEffort, 'low');
+});
+
+test('思考强度：target 固定值优先于会话选择；auto 跟随会话', async () => {
+	const llm = createLlm(
+		{ 'p1/m1': [okAttempt('ok'), okAttempt('ok')] },
+		{
+			'p1/m1': {
+				provider: 'p1',
+				id: 'm1',
+				name: 'M1',
+				reasoning: { efforts: [{ id: 'low' }, { id: 'high' }], defaultEffort: 'low' },
+			},
+		},
+	);
+	const fixed = makeAdapter(
+		makeConfig([target('p1', 'm1', { reasoningEffort: 'low' })]),
+		llm,
+	).adapter;
+	await collect(fixed.stream({ ...streamOptions, reasoningEffort: 'max' }));
+	assert.equal(llm.calls[0].reasoningEffort, 'low');
+
+	const auto = makeAdapter(makeConfig([target('p1', 'm1')]), llm).adapter;
+	await collect(auto.stream({ ...streamOptions, reasoningEffort: 'high' }));
+	assert.equal(llm.calls[1].reasoningEffort, 'high');
+});
+
+test('思考强度：认不出的档位退到目标 defaultEffort，而不是硬失败', async () => {
+	const llm = createLlm(
+		{ 'p1/m1': [okAttempt('ok')] },
+		{
+			'p1/m1': {
+				provider: 'p1',
+				id: 'm1',
+				name: 'M1',
+				reasoning: {
+					efforts: [
+						{ id: 'medium', name: 'Medium' },
+						{ id: 'high', name: 'High' },
+					],
+					defaultEffort: 'high',
+				},
+			},
+		},
+	);
+	const { adapter } = makeAdapter(makeConfig([target('p1', 'm1')]), llm);
+
+	await collect(adapter.stream({ ...streamOptions, reasoningEffort: 'custom-unknown-level' }));
+
+	assert.equal(llm.calls[0].reasoningEffort, 'high');
+});
+
+test('思考强度：上游拒绝时按报错里的档位就近重试', async () => {
+	const rejection = Object.assign(
+		new Error('does not support reasoning effort "max"; supported: low, medium, high'),
+		{ code: 'UNSUPPORTED_REASONING_EFFORT' },
+	);
+	const llm = createLlm(
+		{ 'p1/m1': [rejection, okAttempt('recovered')] },
+		{
+			'p1/m1': {
+				provider: 'p1',
+				id: 'm1',
+				name: 'M1',
+				reasoning: { efforts: [{ id: 'max', name: 'Max' }] },
+			},
+		},
+	);
+	const { adapter } = makeAdapter(makeConfig([target('p1', 'm1')]), llm);
+
+	const chunks = await collect(adapter.stream({ ...streamOptions, reasoningEffort: 'max' }));
+
+	assert.equal(llm.calls.length, 2);
+	assert.equal(llm.calls[0].reasoningEffort, 'max');
+	assert.equal(llm.calls[1].reasoningEffort, 'high');
+	assert.equal(chunks.at(-1).reason.kind, 'stop');
+});
+
+test('思考强度：上游拒绝且报错没有可用档位时，省略参数重试一次', async () => {
+	const rejection = Object.assign(new Error('reasoning effort is not supported'), {
+		code: 'UNSUPPORTED_REASONING_EFFORT',
+	});
+	const llm = createLlm(
+		{ 'p1/m1': [rejection, okAttempt('recovered')] },
+		{
+			'p1/m1': {
+				provider: 'p1',
+				id: 'm1',
+				name: 'M1',
+				reasoning: { efforts: [{ id: 'max', name: 'Max' }] },
+			},
+		},
+	);
+	const { adapter } = makeAdapter(makeConfig([target('p1', 'm1')]), llm);
+
+	await collect(adapter.stream({ ...streamOptions, reasoningEffort: 'max' }));
+
+	assert.equal(llm.calls.length, 2);
+	assert.equal('reasoningEffort' in llm.calls[1], false);
+});
+
+test('思考强度：能力查询期间取消 -> aborted finish，不把取消当成 target 失败', async () => {
+	const controller = new AbortController();
+	const llm = createLlm({});
+	llm.resolveModelInfo = async () => {
+		controller.abort(new Error('user cancel'));
+		throw new Error('model info lookup aborted');
+	};
+	const { adapter } = makeAdapter(makeConfig([target('p1', 'm1')]), llm);
+
+	const chunks = await collect(
+		adapter.stream({ ...streamOptions, reasoningEffort: 'max', signal: controller.signal }),
+	);
+
+	assert.equal(llm.calls.length, 0);
+	assert.equal(chunks.length, 1);
+	assert.equal(chunks[0].reason.kind, 'aborted');
 });
 
 test('listModels：有链才提供 auto；dormant 时不提供任何模型', async () => {

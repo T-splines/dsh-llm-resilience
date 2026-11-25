@@ -71,6 +71,8 @@ test('target 缺省值会被补齐，且每个 target 独立', () => {
 	});
 
 	assert.equal(resolved.targets[0].enabled, true);
+	assert.equal(resolved.targets[0].reasoningEffort, 'auto');
+	assert.equal(resolved.targets[1].reasoningEffort, 'auto');
 	assert.equal(resolved.targets[0].maxRetries, 5);
 	assert.equal(resolved.targets[0].initialDelayMs, 1500);
 	assert.equal(resolved.targets[0].multiplier, 2);

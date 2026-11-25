@@ -24,6 +24,7 @@ of quota or broken, and a persistent breaker stops hammering a dead upstream.
 - [What it registers](#what-it-registers)
 - [Install](#install)
 - [Configuration](#configuration)
+- [Reasoning effort](#reasoning-effort)
 - [Error classification](#error-classification)
 - [Streaming, tool calls and step replay](#streaming-tool-calls-and-step-replay)
 - [Circuit breaker](#circuit-breaker)
@@ -83,8 +84,11 @@ target resets the backoff instead of inheriting the previous target's already-do
   offload / compaction layers can recover first.
 - **Settings page.** Edit the chain, reorder targets, see each retry schedule, and watch live
   breaker state (`closed / open / half-open / probing`) next to version and uninstall.
-- **Tested.** 90 `node --test` cases plus isolated DSH end-to-end smoke runs with a fake
-  OpenAI-compatible server (see [DESIGN.md](DESIGN.md)).
+- **Reasoning effort never makes a model unusable.** The synthetic model advertises the
+  full level set; a session's `max` is mapped to each target's nearest declared level, and
+  a target with no thinking metadata simply receives no effort parameter (its own default).
+- **Tested.** 117 `node --test` cases plus 12 isolated DSH end-to-end scenarios against a
+  fake OpenAI-compatible server (see [DESIGN.md](DESIGN.md)).
 
 ## What it registers
 
@@ -191,11 +195,50 @@ retrying the same target only wastes the budget. They should fall back on the fi
 |:--|:--|
 | `enabled` | master switch; the route still exists when disabled, but rejects requests |
 | `route` | synthetic provider name (default `fallback`); must not appear in `targets` |
-| `targets[]` | ordered `{ provider, model, enabled, label, maxRetries, initialDelayMs, multiplier, maxDelayMs, jitterRatio }` |
+| `targets[]` | ordered `{ provider, model, enabled, label, reasoningEffort, maxRetries, initialDelayMs, multiplier, maxDelayMs, jitterRatio }` |
 | `breaker` | `failureThreshold`, `lockMs`, probe settings (`enabled`, `background`, `timeoutMs`, `maxTokens`, `prompt`), `stateFile` |
 | `limits` | `maxTotalMs`, `maxAttempts`; `0` disables that dimension |
 | `toolCalls.retryMalformed` | retry a broken model-generated tool call (default `true`); tool **execution** retries are not supported |
 | `codeActions` | override the default action per stable error code (`retry` / `fallback` / `fail`) |
+
+A target's `reasoningEffort` defaults to `auto` (follow the session/host request). Setting
+it to `off` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max` (or a provider-specific
+name) fixes that target to the value; an unsupported value is still mapped by the rules
+below.
+
+## Reasoning effort
+
+The host validates `reasoningEffort` against the synthetic `fallback/auto` model **before**
+a request reaches the adapter. If that model only declared the intersection of target
+capabilities, one manually added model without thinking metadata would reject `max` before
+the chain runs — exactly what happened in 0.5.10 and earlier. The synthetic model now always
+advertises the full standard level set; the real choice is made per target at dispatch:
+
+| standard level | value |
+|:--|--:|
+| `off` | 0 |
+| `minimal` | 10 |
+| `low` | 25 |
+| `medium` | 50 |
+| `high` | 75 |
+| `xhigh` | 90 |
+| `max` | 100 |
+
+- Common aliases (`none`, `extra-high`, `maximum`, …) share the same scale; numeric strings
+  from `0` to `100` are accepted too.
+- **Nearest mapping:** pick the closest level the target declares; on a tie choose the
+  higher one (asking for `max` never silently becomes `low`).
+- **Unknown name:** fall back to the target's highest level; only when it has no rankable
+  levels use `defaultEffort`, then its first level.
+- **No thinking metadata:** omit `reasoningEffort` and use the target default. A model that
+  works when called directly remains usable inside the chain; a one-time warning points at
+  `reasoningEfforts` (or `modelOverrides.reasoningEfforts`) when the model actually supports
+  thinking but the provider profile does not declare it.
+- **Runtime backstop:** if the upstream still rejects the level, the adapter reads the
+  supported levels from its error message, retries the nearest one, then retries once with
+  the parameter omitted. Only after that does it count as a target failure and fall back.
+- Mapping and omission are recorded in the session as `plugin:llm-fallback`
+  (`kind: "effort"`), so "why did this target receive a different level?" is answerable.
 
 ## Error classification
 
@@ -255,7 +298,9 @@ half-open --(probe fails)--> open for another lock window
 Plugins → Installed → `@magic6/dsh-llm-resilience` → **Model fallback chain**:
 
 - per-target rows: enabled, provider, model (read-only dropdowns from the session model
-  catalog), label, retry parameters, move up/down, delete, add;
+  catalog), reasoning effort, label, retry parameters, move up/down, delete, add; the
+  effort dropdown lists declared levels first, then standard levels, with `auto` meaning
+  "follow the session";
 - retry-plan tooltip: one line per retry, with the jitter range when `jitter > 0`;
 - breaker and budget fields;
 - live runtime state polled from the host (`closed / open / half-open / probing`, remaining
