@@ -25,7 +25,7 @@ e2e/run.sh --list       # 列出场景
 
 | 变量 | 作用 |
 |:--|:--|
-| `PLUGIN_SPEC` | 装哪个版本，默认 `@magic6/dsh-llm-resilience@<package.json version>`。设成仓库路径可测源码，设成 `@…@0.5.5` 可做回归对照 |
+| `PLUGIN_SPEC` | 装哪个，默认**本仓库路径**（link: 安装，测的是工作树源码）。设成 `@magic6/dsh-llm-resilience@0.5.5` 可做回归对照，设成 `@…@<版本>` 可验证 registry 上的包 |
 | `E2E_WORK` | 工作目录（含独立 `DSH_HOME`），默认 `/tmp/dsh-llm-resilience-e2e` |
 | `PORT_A` / `PORT_B` | 两个假 server 的端口，默认 8799 / 8798 |
 | `DSH_BIN` | dsh 可执行文件，默认从 PATH 找 |

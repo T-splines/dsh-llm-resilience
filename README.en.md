@@ -309,6 +309,27 @@ all three repositories got a `windows-latest` CI job instead of relying on luck.
 > mean "unsupported" — it means nobody has verified it yet. If you ran the suite
 > somewhere else, a PR adding the row is welcome.
 
+## End-to-end self-check
+
+Unit tests cannot tell you what *the package installed on your machine* does once a real
+`dsh` loads it and a real HTTP fault arrives. The repository therefore carries an
+end-to-end layer:
+
+```bash
+npm run test:e2e      # same as e2e/run.sh
+```
+
+It starts an **isolated `DSH_HOME`**, builds a temporary profile, installs this package
+from npm, and points two **fake providers** at `127.0.0.1` — no real API calls. Their
+behaviour is scripted per run (healthy / 500 / gateway-wrapped 400 / empty / malformed
+tool call …).
+
+Assertions do not ask "was there an error"; they ask **who was called, how many times, and
+with what budget**. See [e2e/README.md](e2e/README.md) for the scenario list.
+
+> The acceptance rule for this layer is in that README: a new scenario must **go red on
+> the old version**. A test that is always green proves nothing.
+
 ## Compatibility and migration
 
 - DSH `0.2.1-rc.x` / `0.2.2-rc.x` (`engines.dsh` is `>=0.2.1-0 <0.3.0-0`), Node.js 20+.

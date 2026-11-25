@@ -22,7 +22,9 @@ set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(dirname "$HERE")"
 DSH_BIN="${DSH_BIN:-$(command -v dsh || echo "$HOME/.npm-global/lib/node_modules/@deepseek-ai/dsh/lib/bin.js")}"
-PLUGIN_SPEC="${PLUGIN_SPEC:-@magic6/dsh-llm-resilience@$(node -p "require('$REPO/package.json').version")}"
+# 默认测**工作树源码**（link: 安装），因为跑 e2e 的时机就是「刚改完，想知道有没有破」。
+# 想验证 registry 上那个包，设 PLUGIN_SPEC=@magic6/dsh-llm-resilience@<版本>。
+PLUGIN_SPEC="${PLUGIN_SPEC:-$REPO}"
 
 WORK="${E2E_WORK:-/tmp/dsh-llm-resilience-e2e}"
 export DSH_HOME="$WORK/home"

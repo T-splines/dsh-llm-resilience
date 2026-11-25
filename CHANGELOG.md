@@ -4,6 +4,34 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.5.8] - 2026-11-25
+
+### Added
+
+- **An end-to-end layer (`e2e/`, `npm run test:e2e`).** A real `dsh` is started in an
+  isolated `DSH_HOME` with this package installed, against two scripted fake providers on
+  `127.0.0.1`. Assertions check *who was called, how many times and with what budget* —
+  not merely that the process exited cleanly.
+
+  This exists because of a specific mistake: on 2026-11-24 the plugin appeared fine in
+  production ("no more errors"), when in fact the session had been switched to call a
+  provider directly and the chain was never entered. **A green run with no traffic proves
+  nothing**, and unit tests cannot see these failures at all — their adapter is a fake.
+
+  Seven scenarios: `baseline`, `upstream400`, `genuine400`, `transient500`, `exhausted`,
+  `malformed`, `breaker` (four rounds covering the real `background: true` probe
+  semantics). Verified as a regression net: **0.5.5 fails 2 of them** (the wrapper-400
+  no-op and the `maxTokens: 1` probe), **0.5.8 passes all 7**. That comparison is now the
+  acceptance rule for any new scenario — a test that is always green is not a test.
+
+- CI runs the e2e suite on `ubuntu-latest` with a pinned `dsh`; no API keys are involved.
+
+### Documentation
+
+- README (both languages) gained an "end-to-end self-check" section; `DESIGN.md` now
+  separates scenarios that exist from scenarios that are still gaps, instead of claiming
+  the whole list.
+
 ## [0.5.7] - 2026-11-25
 
 ### Documentation
